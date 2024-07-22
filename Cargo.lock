@@ -322,8 +322,8 @@ dependencies = [
  "web3",
  "which",
  "zkevm-assembly",
- "zkevm_opcode_defs",
- "zkevm_tester",
+ "zkevm_opcode_defs 1.5.0 (git+https://github.com/matter-labs/era-zkevm_opcode_defs?branch=v1.5.0)",
+ "zkevm_tester 1.5.0",
 ]
 
 [[package]]
@@ -338,7 +338,7 @@ dependencies = [
  "semver",
  "solidity-adapter",
  "zkevm-assembly",
- "zkevm_tester",
+ "zkevm_tester 1.5.0 (git+https://github.com/matter-labs/era-zkevm_tester?branch=v1.5.0)",
 ]
 
 [[package]]
@@ -594,7 +594,7 @@ dependencies = [
  "serde",
  "sha3",
  "zkevm-assembly",
- "zkevm_opcode_defs",
+ "zkevm_opcode_defs 1.5.0 (git+https://github.com/matter-labs/era-zkevm_opcode_defs?branch=v1.5.0)",
 ]
 
 [[package]]
@@ -649,7 +649,7 @@ dependencies = [
  "structopt",
  "which",
  "zkevm-assembly",
- "zkevm_opcode_defs",
+ "zkevm_opcode_defs 1.5.0 (git+https://github.com/matter-labs/era-zkevm_opcode_defs?branch=v1.5.0)",
 ]
 
 [[package]]
@@ -659,7 +659,9 @@ dependencies = [
  "hex",
  "primitive-types",
  "rocksdb",
- "zkevm_opcode_defs",
+ "thiserror",
+ "zk_evm_abstractions 1.5.1",
+ "zkevm_opcode_defs 1.5.0 (git+https://github.com/matter-labs/era-zkevm_opcode_defs.git?branch=v1.5.1)",
 ]
 
 [[package]]
@@ -2800,8 +2802,8 @@ source = "git+https://github.com/matter-labs/vm2#9342db726462b76aa7e4ed246684b13
 dependencies = [
  "enum_dispatch",
  "primitive-types",
- "zk_evm_abstractions",
- "zkevm_opcode_defs",
+ "zk_evm_abstractions 1.5.0",
+ "zkevm_opcode_defs 1.5.0 (git+https://github.com/matter-labs/era-zkevm_opcode_defs?branch=v1.5.0)",
 ]
 
 [[package]]
@@ -3157,6 +3159,19 @@ checksum = "ced3678a2879b30306d323f4542626697a464a97c0a07c9aebf7ebca65cd4dde"
 [[package]]
 name = "zk_evm"
 version = "1.5.0"
+dependencies = [
+ "anyhow",
+ "lazy_static",
+ "num",
+ "serde",
+ "serde_json",
+ "static_assertions",
+ "zk_evm_abstractions 1.5.0",
+]
+
+[[package]]
+name = "zk_evm"
+version = "1.5.0"
 source = "git+https://github.com/matter-labs/era-zk_evm.git?branch=v1.5.0#0c5cdca00cca4fa0a8c49147a11048c24f8a4b12"
 dependencies = [
  "anyhow",
@@ -3165,7 +3180,7 @@ dependencies = [
  "serde",
  "serde_json",
  "static_assertions",
- "zk_evm_abstractions",
+ "zk_evm_abstractions 1.5.0",
 ]
 
 [[package]]
@@ -3177,7 +3192,19 @@ dependencies = [
  "num_enum",
  "serde",
  "static_assertions",
- "zkevm_opcode_defs",
+ "zkevm_opcode_defs 1.5.0 (git+https://github.com/matter-labs/era-zkevm_opcode_defs?branch=v1.5.0)",
+]
+
+[[package]]
+name = "zk_evm_abstractions"
+version = "1.5.1"
+source = "git+https://github.com/matter-labs/era-zk_evm_abstractions.git?branch=v1.5.1#eecb28df7d6dbcb728d4e9106933d288e4cb267e"
+dependencies = [
+ "anyhow",
+ "num_enum",
+ "serde",
+ "static_assertions",
+ "zkevm_opcode_defs 1.5.0 (git+https://github.com/matter-labs/era-zkevm_opcode_defs.git?branch=v1.5.1)",
 ]
 
 [[package]]
@@ -3196,7 +3223,7 @@ dependencies = [
  "smallvec",
  "structopt",
  "thiserror",
- "zkevm_opcode_defs",
+ "zkevm_opcode_defs 1.5.0 (git+https://github.com/matter-labs/era-zkevm_opcode_defs?branch=v1.5.0)",
 ]
 
 [[package]]
@@ -3216,6 +3243,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "zkevm_opcode_defs"
+version = "1.5.0"
+source = "git+https://github.com/matter-labs/era-zkevm_opcode_defs.git?branch=v1.5.1#9c470e3dbb093c4878b04b61e4d9459d94b41d45"
+dependencies = [
+ "bitflags 2.5.0",
+ "blake2",
+ "ethereum-types",
+ "k256",
+ "lazy_static",
+ "p256",
+ "serde",
+ "sha2",
+ "sha3",
+]
+
+[[package]]
+name = "zkevm_tester"
+version = "1.5.0"
+dependencies = [
+ "anyhow",
+ "ethabi",
+ "futures",
+ "hex",
+ "num-bigint",
+ "num-traits",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tracing",
+ "vlog",
+ "zk_evm 1.5.0",
+ "zkevm-assembly",
+]
+
+[[package]]
 name = "zkevm_tester"
 version = "1.5.0"
 source = "git+https://github.com/matter-labs/era-zkevm_tester?branch=v1.5.0#4439528eb936b932be9497923c1ad5c642101ca3"
@@ -3231,7 +3293,7 @@ dependencies = [
  "sha2",
  "tracing",
  "vlog",
- "zk_evm",
+ "zk_evm 1.5.0 (git+https://github.com/matter-labs/era-zk_evm.git?branch=v1.5.0)",
  "zkevm-assembly",
 ]
 

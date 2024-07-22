@@ -106,6 +106,7 @@ impl Case {
         } else {
             test_name
         };
+        println!("Running case {name}");
 
         for (index, input) in self.inputs.into_iter().enumerate() {
             input.run_eravm::<_, M>(
