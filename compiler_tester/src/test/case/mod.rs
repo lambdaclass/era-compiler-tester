@@ -32,7 +32,7 @@ pub struct Case {
     /// The case name.
     name: Option<String>,
     /// The case inputs.
-    inputs: Vec<Input>,
+    pub inputs: Vec<Input>,
 }
 
 impl Case {

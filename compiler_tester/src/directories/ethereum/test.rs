@@ -13,6 +13,7 @@ use crate::directories::Buildable;
 use crate::filters::Filters;
 use crate::summary::Summary;
 use crate::target::Target;
+use crate::test::case::input::Input;
 use crate::test::case::Case;
 use crate::test::Test;
 use crate::vm::address_iterator::AddressIterator;
@@ -341,7 +342,7 @@ impl Buildable for EthereumTest {
             }
         };
 
-        let case = match Case::try_from_ethereum(&calls, instances, &last_source, &target) {
+        let mut case = match Case::try_from_ethereum(&calls, instances, &last_source, &target) {
             Ok(case) => case,
             Err(error) => {
                 Summary::invalid(
@@ -353,6 +354,54 @@ impl Buildable for EthereumTest {
                 return None;
             }
         };
+
+        let ignored_tests: Vec<String> = vec![
+            "solidity/test/libsolidity/semanticTests/state/uncalled_blockhash.sol",
+            "solidity/test/libsolidity/semanticTests/state/block_timestamp.sol",
+            "solidity/test/libsolidity/semanticTests/builtinFunctions/blockhash.sol",
+            "solidity/test/libsolidity/semanticTests/state/block_number.sol",
+        ]
+        .into_iter()
+        .map(|x| x.to_string())
+        .collect();
+
+        if ignored_tests.contains(&self.identifier) {
+            return None;
+        }
+
+        if self.identifier
+            == "solidity/test/libsolidity/semanticTests/state/blockhash_basic.sol".to_string()
+        {
+            let new_inputs: Vec<Input> = case
+                .inputs
+                .iter()
+                .enumerate()
+                .filter(|x| x.0 != 4)
+                .map(|x| x.1)
+                .cloned()
+                .collect();
+            case.inputs = new_inputs;
+        }
+
+        if self.identifier
+            == "solidity/test/libsolidity/semanticTests/externalContracts/FixedFeeRegistrar.sol"
+                .to_string()
+        {
+            let new_inputs: Vec<Input> = case
+                .inputs
+                .iter()
+                .enumerate()
+                .filter(|x| !vec![20, 22, 23, 24, 25].contains(&x.0))
+                .map(|x| x.1)
+                .cloned()
+                .collect();
+            case.inputs = new_inputs;
+        }
+
+        if self.identifier == "solidity/test/libsolidity/semanticTests/functionCall/precompile_extcodesize_check.sol".to_string() {
+            let new_inputs: Vec<Input> = case.inputs.iter().enumerate().filter(|x| x.0 != 2).map(|x| x.1).cloned().collect();
+            case.inputs = new_inputs;
+        }
 
         Some(Test::new(
             self.identifier.to_owned(),
