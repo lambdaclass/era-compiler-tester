@@ -269,9 +269,6 @@ impl Buildable for EthereumTest {
             .map(|build| (build.bytecode_hash, build.assembly))
             .collect();
 
-        
-    
-
         Some(Test::new(
             self.identifier.to_owned(),
             vec![case],
@@ -363,24 +360,41 @@ impl Buildable for EthereumTest {
             "solidity/test/libsolidity/semanticTests/state/block_timestamp.sol",
             "solidity/test/libsolidity/semanticTests/builtinFunctions/blockhash.sol",
             "solidity/test/libsolidity/semanticTests/state/block_number.sol",
-            ].into_iter().map(|x| x.to_string()).collect();
+        ]
+        .into_iter()
+        .map(|x| x.to_string())
+        .collect();
 
         if ignored_tests.contains(&self.identifier) {
             return None;
         }
 
-        if self.identifier == "solidity/test/libsolidity/semanticTests/array/array_storage_index_access.sol".to_string() {
-            let new_inputs: Vec<Input> = case.inputs.iter().enumerate().filter(|x| x.0 != 7).map(|x| x.1).cloned().collect();
+        if self.identifier
+            == "solidity/test/libsolidity/semanticTests/state/blockhash_basic.sol".to_string()
+        {
+            let new_inputs: Vec<Input> = case
+                .inputs
+                .iter()
+                .enumerate()
+                .filter(|x| x.0 != 4)
+                .map(|x| x.1)
+                .cloned()
+                .collect();
             case.inputs = new_inputs;
         }
 
-        if self.identifier == "solidity/test/libsolidity/semanticTests/state/blockhash_basic.sol".to_string() {
-            let new_inputs: Vec<Input> = case.inputs.iter().enumerate().filter(|x| x.0 != 4).map(|x| x.1).cloned().collect();
-            case.inputs = new_inputs;
-        }
-
-        if self.identifier == "solidity/test/libsolidity/semanticTests/externalContracts/FixedFeeRegistrar.sol".to_string() {
-            let new_inputs: Vec<Input> = case.inputs.iter().enumerate().filter(|x| !vec![20,22,23,24,25].contains(&x.0)).map(|x| x.1).cloned().collect();
+        if self.identifier
+            == "solidity/test/libsolidity/semanticTests/externalContracts/FixedFeeRegistrar.sol"
+                .to_string()
+        {
+            let new_inputs: Vec<Input> = case
+                .inputs
+                .iter()
+                .enumerate()
+                .filter(|x| !vec![20, 22, 23, 24, 25].contains(&x.0))
+                .map(|x| x.1)
+                .cloned()
+                .collect();
             case.inputs = new_inputs;
         }
 
