@@ -114,6 +114,7 @@ pub fn run_vm(
         context_val.msg_sender,
         context_val.u128_value,
         default_aa_code_hash.into(),
+        u64::MAX,
     );
 
     if abi_params.is_constructor {
@@ -152,6 +153,11 @@ pub fn run_vm(
             events: vec![],
         },
         ExecutionOutput::Panic => Output {
+            return_data: vec![],
+            exception: true,
+            events: vec![],
+        },
+        ExecutionOutput::SuspendedOnHook{hook,pc_to_resume_from} => Output {
             return_data: vec![],
             exception: true,
             events: vec![],
