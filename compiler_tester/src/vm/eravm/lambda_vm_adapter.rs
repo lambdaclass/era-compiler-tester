@@ -10,8 +10,6 @@ use crate::vm::execution_result::ExecutionResult;
 use anyhow::anyhow;
 use lambda_vm::state::VMState;
 use lambda_vm::store::initial_decommit;
-use lambda_vm::store::InMemory;
-use lambda_vm::store::Storage;
 use lambda_vm::store::InitialStorageMemory;
 use lambda_vm::store::StateStorage;
 use lambda_vm::store::ContractStorageMemory;
@@ -117,7 +115,8 @@ pub fn run_vm(
         context_val.msg_sender,
         context_val.u128_value,
         default_aa_code_hash.into(),
-        u64::MAX,
+        0,
+        false
     );
 
     if abi_params.is_constructor {
