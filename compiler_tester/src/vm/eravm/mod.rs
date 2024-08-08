@@ -23,6 +23,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use colored::Colorize;
+use zkevm_opcode_defs::ethereum_types::U256;
 
 use crate::compilers::downloader::Downloader as CompilerDownloader;
 use crate::vm::execution_result::ExecutionResult;
@@ -44,6 +45,8 @@ pub struct EraVM {
     evm_interpreter_code_hash: web3::types::U256,
     /// The deployed contracts.
     deployed_contracts: HashMap<web3::types::Address, zkevm_assembly::Assembly>,
+    /// The deployed contracts for vm2 and lambda_vm which use u256 as key
+    deployed_contracts_lambda: HashMap<U256, Vec<U256>>,
     /// The published EVM bytecodes
     published_evm_bytecodes: HashMap<web3::types::U256, Vec<web3::types::U256>>,
     /// The storage state.
@@ -121,6 +124,7 @@ impl EraVM {
             default_aa_code_hash: system_contracts.default_aa.bytecode_hash,
             evm_interpreter_code_hash: system_contracts.evm_interpreter.bytecode_hash,
             deployed_contracts: HashMap::new(),
+            deployed_contracts_lambda: HashMap::new(),
             storage,
             published_evm_bytecodes: HashMap::new(),
         };
@@ -309,18 +313,20 @@ impl EraVM {
         }
         #[cfg(feature = "lambda_vm")]
         {
-            let (result, storage_changes, deployed_contracts) = lambda_vm_adapter::run_vm(
-                self.deployed_contracts.clone(),
-                &calldata,
-                self.storage.clone(),
-                entry_address,
-                Some(context),
-                vm_launch_option,
-                self.known_contracts.clone(),
-                self.default_aa_code_hash,
-                self.evm_interpreter_code_hash,
-            )
-            .map_err(|error| anyhow::anyhow!("EraVM failure: {}", error))?;
+            let (result, storage_changes, deployed_contracts, deployed_contracts_lambda) =
+                lambda_vm_adapter::run_vm(
+                    self.deployed_contracts.clone(),
+                    self.deployed_contracts_lambda.clone(),
+                    &calldata,
+                    self.storage.clone(),
+                    entry_address,
+                    Some(context),
+                    vm_launch_option,
+                    self.known_contracts.clone(),
+                    self.default_aa_code_hash,
+                    self.evm_interpreter_code_hash,
+                )
+                .map_err(|error| anyhow::anyhow!("EraVM failure: {}", error))?;
 
             for (key, value) in storage_changes.into_iter() {
                 self.storage.insert(key, value);
@@ -331,6 +337,13 @@ impl EraVM {
                 }
 
                 self.deployed_contracts.insert(address, assembly);
+            }
+            for (key, bytecode) in deployed_contracts_lambda.into_iter() {
+                if self.deployed_contracts_lambda.contains_key(&key) {
+                    continue;
+                }
+
+                self.deployed_contracts_lambda.insert(key, bytecode);
             }
 
             Ok(result)

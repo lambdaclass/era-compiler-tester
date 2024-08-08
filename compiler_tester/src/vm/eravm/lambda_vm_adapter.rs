@@ -38,6 +38,7 @@ pub fn address_into_u256(address: H160) -> U256 {
 
 pub fn run_vm(
     contracts: HashMap<web3::ethabi::Address, Assembly>,
+    lambda_contracts: HashMap<U256, Vec<U256>>,
     calldata: &[u8],
     storage: HashMap<StorageKey, H256>,
     entry_address: web3::ethabi::Address,
@@ -50,6 +51,7 @@ pub fn run_vm(
     ExecutionResult,
     HashMap<StorageKey, H256>,
     HashMap<web3::ethabi::Address, Assembly>,
+    HashMap<U256, Vec<U256>>,
 )> {
     let abi_params = match vm_launch_option {
         VmLaunchOption::Call => FullABIParams {
@@ -72,6 +74,7 @@ pub fn run_vm(
 
     let mut storage_changes = HashMap::new();
     let mut deployed_contracts = HashMap::new();
+    let mut deployed_contracts_lambda = HashMap::new();
 
     let mut lambda_storage: HashMap<lambda_vm::store::StorageKey, U256> = HashMap::new();
     for (key, value) in storage {
@@ -98,12 +101,19 @@ pub fn run_vm(
 
         lambda_contract_storage.insert(key, bytecode_u256);
     }
+    for (key, bytecode) in lambda_contracts {
+        lambda_contract_storage.insert(key, bytecode);
+    }
 
     let mut storage = InMemory::new(lambda_contract_storage, lambda_storage);
 
     let initial_storage = storage.clone();
 
-    let initial_program = initial_decommit(&mut storage, entry_address);
+    let initial_program = initial_decommit(
+        &mut storage,
+        entry_address,
+        evm_interpreter_code_hash.into(),
+    );
 
     let context_val = context.unwrap();
 
@@ -114,6 +124,7 @@ pub fn run_vm(
         context_val.msg_sender,
         context_val.u128_value,
         default_aa_code_hash.into(),
+        evm_interpreter_code_hash.into(),
     );
 
     if abi_params.is_constructor {
@@ -158,12 +169,7 @@ pub fn run_vm(
         },
     };
 
-    for (key, value) in era_vm
-        .storage
-        .borrow_mut()
-        .get_state_storage()
-        .into_iter()
-    {
+    for (key, value) in era_vm.storage.borrow_mut().get_state_storage().into_iter() {
         if initial_storage.storage_read(key.clone())? != Some(value.clone()) {
             let mut bytes: [u8; 32] = [0; 32];
             value.to_big_endian(&mut bytes);
@@ -176,6 +182,16 @@ pub fn run_vm(
             );
         }
     }
+    for (key, value) in era_vm
+        .storage
+        .borrow_mut()
+        .get_contract_storage()
+        .into_iter()
+    {
+        if initial_storage.decommit(key.clone()).unwrap() != Some(value.clone()) {
+            deployed_contracts_lambda.insert(key.clone(), value.clone());
+        }
+    }
 
     Ok((
         ExecutionResult {
@@ -186,6 +202,7 @@ pub fn run_vm(
         },
         storage_changes,
         deployed_contracts,
+        deployed_contracts_lambda,
     ))
 }
 
