@@ -10,13 +10,13 @@ use crate::vm::execution_result::ExecutionResult;
 use anyhow::anyhow;
 use lambda_vm::state::VMState;
 use lambda_vm::store::initial_decommit;
+use lambda_vm::store::ContractStorageMemory;
+use lambda_vm::store::InitialStorage;
 use lambda_vm::store::InitialStorageMemory;
 use lambda_vm::store::StateStorage;
-use lambda_vm::store::ContractStorageMemory;
 use lambda_vm::value::TaggedValue;
 use lambda_vm::vm::ExecutionOutput;
 use lambda_vm::EraVM;
-use lambda_vm::store::InitialStorage;
 use std::cell::RefCell;
 use std::rc::Rc;
 use web3::types::H160;
@@ -100,9 +100,13 @@ pub fn run_vm(
 
         lambda_contract_storage.insert(key, bytecode_u256);
     }
-    let initial_storage = InitialStorageMemory{initial_storage: lambda_storage};
+    let initial_storage = InitialStorageMemory {
+        initial_storage: lambda_storage,
+    };
     let storage_before_run = initial_storage.clone();
-    let contract_storage = ContractStorageMemory{contract_storage: lambda_contract_storage};
+    let contract_storage = ContractStorageMemory {
+        contract_storage: lambda_contract_storage,
+    };
 
     let initial_program = initial_decommit(&initial_storage, &contract_storage, entry_address);
 
@@ -116,7 +120,7 @@ pub fn run_vm(
         context_val.u128_value,
         default_aa_code_hash.into(),
         0,
-        false
+        false,
     );
 
     if abi_params.is_constructor {
@@ -140,7 +144,11 @@ pub fn run_vm(
         TaggedValue::new_raw_integer(abi_params.r5_value.unwrap_or_default()),
     );
 
-    let mut era_vm = EraVM::new(vm,Rc::new(RefCell::new(initial_storage)),Rc::new(RefCell::new(contract_storage)));
+    let mut era_vm = EraVM::new(
+        vm,
+        Rc::new(RefCell::new(initial_storage)),
+        Rc::new(RefCell::new(contract_storage)),
+    );
     let result = match zkevm_assembly::get_encoding_mode() {
         zkevm_assembly::RunningVmEncodingMode::Testing => era_vm.run_program_with_test_encode(),
         zkevm_assembly::RunningVmEncodingMode::Production => {
@@ -164,18 +172,17 @@ pub fn run_vm(
             exception: true,
             events: vec![],
         },
-        ExecutionOutput::SuspendedOnHook{hook,pc_to_resume_from} => Output {
+        ExecutionOutput::SuspendedOnHook {
+            hook,
+            pc_to_resume_from,
+        } => Output {
             return_data: vec![],
             exception: true,
             events: vec![],
         },
     };
 
-    for (key, value) in era_vm
-        .state_storage
-        .storage_changes
-        .into_iter()
-    {
+    for (key, value) in era_vm.state_storage.storage_changes.into_iter() {
         if storage_before_run.storage_read(key.clone())? != Some(value.clone()) {
             let mut bytes: [u8; 32] = [0; 32];
             value.to_big_endian(&mut bytes);
