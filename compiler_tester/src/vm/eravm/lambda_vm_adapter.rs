@@ -103,11 +103,9 @@ pub fn run_vm(
     let initial_storage = InitialStorageMemory {
         initial_storage: lambda_storage,
     };
-    let storage_before_run = initial_storage.clone();
     let contract_storage = ContractStorageMemory {
         contract_storage: lambda_contract_storage,
     };
-
     let initial_program = initial_decommit(&initial_storage, &contract_storage, entry_address);
 
     let context_val = context.unwrap();
@@ -146,7 +144,7 @@ pub fn run_vm(
 
     let mut era_vm = EraVM::new(
         vm,
-        Rc::new(RefCell::new(initial_storage)),
+        Rc::new(RefCell::new(initial_storage.clone())),
         Rc::new(RefCell::new(contract_storage)),
     );
     let result = match zkevm_assembly::get_encoding_mode() {
@@ -183,7 +181,7 @@ pub fn run_vm(
     };
 
     for (key, value) in era_vm.state_storage.storage_changes.into_iter() {
-        if storage_before_run.storage_read(key.clone())? != Some(value.clone()) {
+        if initial_storage.storage_read(key.clone())? != Some(value.clone()) {
             let mut bytes: [u8; 32] = [0; 32];
             value.to_big_endian(&mut bytes);
             storage_changes.insert(
