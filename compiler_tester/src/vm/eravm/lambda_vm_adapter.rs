@@ -141,7 +141,12 @@ pub fn run_vm(
     );
 
     let mut era_vm = EraVM::new(vm,Rc::new(RefCell::new(initial_storage)),Rc::new(RefCell::new(contract_storage)));
-    let result = era_vm.run_program_with_custom_bytecode();
+    let result = match zkevm_assembly::get_encoding_mode() {
+        zkevm_assembly::RunningVmEncodingMode::Testing => era_vm.run_program_with_test_encode(),
+        zkevm_assembly::RunningVmEncodingMode::Production => {
+            era_vm.run_program_with_custom_bytecode()
+        }
+    };
     let events = merge_events(&era_vm.state.events);
     let output = match result {
         ExecutionOutput::Ok(output) => Output {
