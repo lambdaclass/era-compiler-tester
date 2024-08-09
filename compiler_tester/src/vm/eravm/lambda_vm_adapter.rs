@@ -106,7 +106,7 @@ pub fn run_vm(
     let contract_storage = ContractStorageMemory {
         contract_storage: lambda_contract_storage,
     };
-    let initial_program = initial_decommit(&initial_storage, &contract_storage, entry_address);
+    let initial_program = initial_decommit(&initial_storage, &contract_storage, entry_address)?;
 
     let context_val = context.unwrap();
 
