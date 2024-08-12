@@ -110,7 +110,12 @@ pub fn run_vm(
     let contract_storage = ContractStorageMemory {
         contract_storage: lambda_contract_storage,
     };
-    let initial_program = initial_decommit(&initial_storage, &contract_storage, entry_address,evm_interpreter_code_hash.into())?;
+    let initial_program = initial_decommit(
+        &initial_storage,
+        &contract_storage,
+        entry_address,
+        evm_interpreter_code_hash.into(),
+    )?;
 
     let context_val = context.unwrap();
 
@@ -121,9 +126,9 @@ pub fn run_vm(
         context_val.msg_sender,
         context_val.u128_value,
         default_aa_code_hash.into(),
+        evm_interpreter_code_hash.into(),
         0,
         false,
-        evm_interpreter_code_hash.into()
     );
 
     if abi_params.is_constructor {
