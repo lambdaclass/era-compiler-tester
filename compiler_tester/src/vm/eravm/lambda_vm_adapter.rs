@@ -40,6 +40,7 @@ pub fn address_into_u256(address: H160) -> U256 {
 
 pub fn run_vm(
     contracts: HashMap<web3::ethabi::Address, Assembly>,
+    blobs: HashMap<U256, Vec<U256>>,
     calldata: &[u8],
     storage: HashMap<StorageKey, H256>,
     entry_address: web3::ethabi::Address,
@@ -52,6 +53,7 @@ pub fn run_vm(
     ExecutionResult,
     HashMap<StorageKey, H256>,
     HashMap<web3::ethabi::Address, Assembly>,
+    HashMap<U256, Vec<U256>>,
 )> {
     let abi_params = match vm_launch_option {
         VmLaunchOption::Call => FullABIParams {
@@ -91,8 +93,8 @@ pub fn run_vm(
     }
 
     let mut lambda_contract_storage: HashMap<U256, Vec<U256>> = HashMap::new();
-    for (key, mut value) in known_contracts {
-        let bytecode = value.compile_to_bytecode()?;
+    for (key, value) in known_contracts.clone() {
+        let bytecode = value.clone().compile_to_bytecode()?;
         let bytecode_u256 = bytecode
             .iter()
             .map(|raw_opcode| U256::from_big_endian(raw_opcode))
@@ -100,13 +102,15 @@ pub fn run_vm(
 
         lambda_contract_storage.insert(key, bytecode_u256);
     }
+
+    lambda_contract_storage.extend(blobs);
     let initial_storage = InitialStorageMemory {
         initial_storage: lambda_storage,
     };
     let contract_storage = ContractStorageMemory {
         contract_storage: lambda_contract_storage,
     };
-    let initial_program = initial_decommit(&initial_storage, &contract_storage, entry_address)?;
+    let initial_program = initial_decommit(&initial_storage, &contract_storage, entry_address,evm_interpreter_code_hash.into())?;
 
     let context_val = context.unwrap();
 
@@ -119,6 +123,7 @@ pub fn run_vm(
         default_aa_code_hash.into(),
         0,
         false,
+        evm_interpreter_code_hash.into()
     );
 
     if abi_params.is_constructor {
@@ -147,7 +152,7 @@ pub fn run_vm(
         Rc::new(RefCell::new(initial_storage.clone())),
         Rc::new(RefCell::new(contract_storage)),
     );
-    let result = match zkevm_assembly::get_encoding_mode() {
+    let (result, blob_tracer) = match zkevm_assembly::get_encoding_mode() {
         zkevm_assembly::RunningVmEncodingMode::Testing => era_vm.run_program_with_test_encode(),
         zkevm_assembly::RunningVmEncodingMode::Production => {
             era_vm.run_program_with_custom_bytecode()
@@ -179,6 +184,7 @@ pub fn run_vm(
             events: vec![],
         },
     };
+    let deployed_blobs = blob_tracer.blobs.clone();
 
     for (key, value) in era_vm.state_storage.storage_changes.into_iter() {
         if initial_storage.storage_read(key.clone())? != Some(value.clone()) {
@@ -192,6 +198,17 @@ pub fn run_vm(
                 H256::from(bytes),
             );
         }
+
+        if key.address
+            == *zkevm_assembly::zkevm_opcode_defs::system_params::DEPLOYER_SYSTEM_CONTRACT_ADDRESS
+        {
+            let mut buffer = [0u8; 32];
+            key.key.to_big_endian(&mut buffer);
+            let deployed_address = web3::ethabi::Address::from_slice(&buffer[12..]);
+            if let Some(code) = known_contracts.get(&value) {
+                deployed_contracts.insert(deployed_address, code.clone());
+            }
+        }
     }
 
     Ok((
@@ -203,6 +220,7 @@ pub fn run_vm(
         },
         storage_changes,
         deployed_contracts,
+        deployed_blobs,
     ))
 }
 
