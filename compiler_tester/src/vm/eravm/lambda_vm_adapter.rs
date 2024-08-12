@@ -10,14 +10,17 @@ use crate::vm::execution_result::ExecutionResult;
 use anyhow::anyhow;
 use lambda_vm::state::VMState;
 use lambda_vm::store::initial_decommit;
-use lambda_vm::store::InMemory;
-use lambda_vm::store::Storage;
+use lambda_vm::store::ContractStorageMemory;
+use lambda_vm::store::InitialStorage;
+use lambda_vm::store::InitialStorageMemory;
+use lambda_vm::store::StateStorage;
 use lambda_vm::value::TaggedValue;
 use lambda_vm::vm::ExecutionOutput;
 use lambda_vm::EraVM;
 use std::cell::RefCell;
 use std::rc::Rc;
 use web3::types::H160;
+use zkevm_assembly::zkevm_opcode_defs::decoding::{EncodingModeProduction, EncodingModeTesting};
 use zkevm_assembly::Assembly;
 use zkevm_opcode_defs::ethereum_types::{H256, U256};
 use zkevm_tester::runners::compiler_tests::FullABIParams;
@@ -83,10 +86,24 @@ pub fn run_vm(
         lambda_storage.insert(lambda_storage_key, value_u256);
     }
 
-    for (_, mut contract) in contracts {
+    let bytecode_to_hash = match zkevm_assembly::get_encoding_mode() {
+        zkevm_assembly::RunningVmEncodingMode::Testing => |bytecode: &[[u8; 32]]| {
+            zkevm_assembly::zkevm_opcode_defs::bytecode_to_code_hash_for_mode::<
+                16,
+                EncodingModeTesting,
+            >(bytecode)
+        },
+        zkevm_assembly::RunningVmEncodingMode::Production => |bytecode: &[[u8; 32]]| {
+            zkevm_assembly::zkevm_opcode_defs::bytecode_to_code_hash_for_mode::<
+                8,
+                EncodingModeProduction,
+            >(bytecode)
+        },
+    };
+
+    for (key, mut contract) in contracts {
         let bytecode = contract.compile_to_bytecode()?;
-        let hash = zkevm_assembly::zkevm_opcode_defs::bytecode_to_code_hash(&bytecode)
-            .map_err(|()| anyhow!("Failed to hash bytecode"))?;
+        let hash = bytecode_to_hash(&bytecode).map_err(|()| anyhow!("Failed to hash bytecode"))?;
         known_contracts.insert(U256::from_big_endian(&hash), contract);
     }
 
@@ -102,16 +119,18 @@ pub fn run_vm(
     }
 
     lambda_contract_storage.extend(blobs);
-
-    let mut storage = InMemory::new(lambda_contract_storage, lambda_storage);
-
-    let initial_storage = storage.clone();
-
+    let initial_storage = InitialStorageMemory {
+        initial_storage: lambda_storage,
+    };
+    let contract_storage = ContractStorageMemory {
+        contract_storage: lambda_contract_storage,
+    };
     let initial_program = initial_decommit(
-        &mut storage,
+        &initial_storage,
+        &contract_storage,
         entry_address,
         evm_interpreter_code_hash.into(),
-    );
+    )?;
 
     let context_val = context.unwrap();
 
@@ -123,6 +142,8 @@ pub fn run_vm(
         context_val.u128_value,
         default_aa_code_hash.into(),
         evm_interpreter_code_hash.into(),
+        0,
+        false,
     );
 
     if abi_params.is_constructor {
@@ -146,8 +167,11 @@ pub fn run_vm(
         TaggedValue::new_raw_integer(abi_params.r5_value.unwrap_or_default()),
     );
 
-    let mut era_vm = EraVM::new(vm, Rc::new(RefCell::new(storage)));
-
+    let mut era_vm = EraVM::new(
+        vm,
+        Rc::new(RefCell::new(initial_storage.clone())),
+        Rc::new(RefCell::new(contract_storage)),
+    );
     let (result, blob_tracer) = match zkevm_assembly::get_encoding_mode() {
         zkevm_assembly::RunningVmEncodingMode::Testing => era_vm.run_program_with_test_encode(),
         zkevm_assembly::RunningVmEncodingMode::Production => {
@@ -171,11 +195,18 @@ pub fn run_vm(
             exception: true,
             events: vec![],
         },
+        ExecutionOutput::SuspendedOnHook {
+            hook,
+            pc_to_resume_from,
+        } => Output {
+            return_data: vec![],
+            exception: true,
+            events: vec![],
+        },
     };
-
     let deployed_blobs = blob_tracer.blobs.clone();
 
-    for (key, value) in era_vm.storage.borrow_mut().get_state_storage().into_iter() {
+    for (key, value) in era_vm.state_storage.storage_changes.into_iter() {
         if initial_storage.storage_read(key.clone())? != Some(value.clone()) {
             let mut bytes: [u8; 32] = [0; 32];
             value.to_big_endian(&mut bytes);
