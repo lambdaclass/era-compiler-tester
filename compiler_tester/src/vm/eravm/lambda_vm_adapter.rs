@@ -144,6 +144,7 @@ pub fn run_vm(
         evm_interpreter_code_hash.into(),
         0,
         false,
+        u32::MAX - 0x80000000,
     );
 
     if abi_params.is_constructor {
