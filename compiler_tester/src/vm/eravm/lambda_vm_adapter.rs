@@ -18,6 +18,7 @@ use lambda_vm::value::TaggedValue;
 use lambda_vm::vm::ExecutionOutput;
 use lambda_vm::EraVM;
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::rc::Rc;
 use web3::types::H160;
 use zkevm_assembly::zkevm_opcode_defs::decoding::{EncodingModeProduction, EncodingModeTesting};
@@ -122,12 +123,13 @@ pub fn run_vm(
     let initial_storage = InitialStorageMemory {
         initial_storage: lambda_storage,
     };
-    let contract_storage = ContractStorageMemory {
+    let mut contract_storage = ContractStorageMemory {
         contract_storage: lambda_contract_storage,
+        decommited_hashes: HashSet::new(),
     };
     let initial_program = initial_decommit(
         &initial_storage,
-        &contract_storage,
+        &mut contract_storage,
         entry_address,
         evm_interpreter_code_hash.into(),
     )?;
