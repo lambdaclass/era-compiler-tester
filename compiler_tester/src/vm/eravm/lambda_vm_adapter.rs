@@ -8,12 +8,11 @@ use std::collections::HashMap;
 
 use crate::vm::execution_result::ExecutionResult;
 use anyhow::anyhow;
-use lambda_vm::state::VMState;
+use lambda_vm::execution::Execution;
 use lambda_vm::store::initial_decommit;
 use lambda_vm::store::ContractStorageMemory;
 use lambda_vm::store::InitialStorage;
 use lambda_vm::store::InitialStorageMemory;
-use lambda_vm::store::StateStorage;
 use lambda_vm::value::TaggedValue;
 use lambda_vm::vm::ExecutionOutput;
 use lambda_vm::EraVM;
@@ -134,7 +133,7 @@ pub fn run_vm(
 
     let context_val = context.unwrap();
 
-    let mut vm = VMState::new(
+    let mut vm = Execution::new(
         initial_program,
         calldata.to_vec(),
         entry_address,
@@ -178,7 +177,7 @@ pub fn run_vm(
             era_vm.run_program_with_custom_bytecode()
         }
     };
-    let events = merge_events(&era_vm.state.events);
+    let events = merge_events(&era_vm.state.events());
     let output = match result {
         ExecutionOutput::Ok(output) => Output {
             return_data: chunk_return_data(&output),
@@ -206,7 +205,7 @@ pub fn run_vm(
     };
     let deployed_blobs = blob_tracer.blobs.clone();
 
-    for (key, value) in era_vm.state_storage.storage_changes.into_iter() {
+    for (key, value) in era_vm.state.storage_changes().into_iter() {
         if initial_storage.storage_read(key.clone())? != Some(value.clone()) {
             let mut bytes: [u8; 32] = [0; 32];
             value.to_big_endian(&mut bytes);
