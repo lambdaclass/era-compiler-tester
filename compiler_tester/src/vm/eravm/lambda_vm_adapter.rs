@@ -13,7 +13,6 @@ use lambda_vm::store::initial_decommit;
 use lambda_vm::store::ContractStorageMemory;
 use lambda_vm::store::InitialStorage;
 use lambda_vm::store::InitialStorageMemory;
-use lambda_vm::store::StateStorage;
 use lambda_vm::value::TaggedValue;
 use lambda_vm::vm::ExecutionOutput;
 use lambda_vm::EraVM;
@@ -178,7 +177,7 @@ pub fn run_vm(
             era_vm.run_program_with_custom_bytecode()
         }
     };
-    let events = merge_events(&era_vm.state.events);
+    let events = merge_events(&era_vm.world.events());
     let output = match result {
         ExecutionOutput::Ok(output) => Output {
             return_data: chunk_return_data(&output),
@@ -206,7 +205,7 @@ pub fn run_vm(
     };
     let deployed_blobs = blob_tracer.blobs.clone();
 
-    for (key, value) in era_vm.state_storage.storage_changes.into_iter() {
+    for (key, value) in era_vm.world.storage_changes().into_iter() {
         if initial_storage.storage_read(key.clone())? != Some(value.clone()) {
             let mut bytes: [u8; 32] = [0; 32];
             value.to_big_endian(&mut bytes);
@@ -264,7 +263,7 @@ fn chunk_return_data(bytes: &[u8]) -> Vec<Value> {
     res
 }
 
-fn merge_events(events: &[lambda_vm::state::Event]) -> Vec<Event> {
+fn merge_events(events: &[lambda_vm::world::Event]) -> Vec<Event> {
     struct TmpEvent {
         topics: Vec<U256>,
         data: Vec<u8>,
@@ -275,7 +274,7 @@ fn merge_events(events: &[lambda_vm::state::Event]) -> Vec<Event> {
     let mut current: Option<(usize, u32, TmpEvent)> = None;
 
     for message in events.into_iter() {
-        let lambda_vm::state::Event {
+        let lambda_vm::world::Event {
             shard_id,
             is_first,
             tx_number,
