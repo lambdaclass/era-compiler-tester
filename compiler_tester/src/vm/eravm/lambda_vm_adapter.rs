@@ -172,11 +172,39 @@ pub fn run_vm(
     };
     let events = merge_events(&era_vm.state.events());
     let output = match result {
-        ExecutionOutput::Ok(output) => Output {
-            return_data: chunk_return_data(&output),
-            exception: false,
-            events,
-        },
+        ExecutionOutput::Ok(output) => {
+            // Only successful transactions can have side effects
+            // The VM doesn't undo side effects done in the initial frame
+            for (key, value) in era_vm.state.storage_changes().into_iter() {
+                if storage.storage.get(key) != Some(value) {
+                    let mut bytes: [u8; 32] = [0; 32];
+                    value.to_big_endian(&mut bytes);
+                    storage_changes.insert(
+                        StorageKey {
+                            address: key.address,
+                            key: key.key,
+                        },
+                        H256::from(bytes),
+                    );
+                }
+
+                if key.address == *zkevm_assembly::zkevm_opcode_defs::system_params::DEPLOYER_SYSTEM_CONTRACT_ADDRESS
+                {
+                    let mut buffer = [0u8; 32];
+                    key.key.to_big_endian(&mut buffer);
+                    let deployed_address = web3::ethabi::Address::from_slice(&buffer[12..]);
+                    if let Some(code) = known_contracts.get(&value) {
+                        deployed_contracts.insert(deployed_address, code.clone());
+                    }
+                }
+            }
+
+            Output {
+                return_data: chunk_return_data(&output),
+                exception: false,
+                events,
+            }
+        }
         ExecutionOutput::Revert(output) => Output {
             return_data: chunk_return_data(&output),
             exception: true,
@@ -197,31 +225,6 @@ pub fn run_vm(
         },
     };
     let deployed_blobs = blob_tracer.blobs.clone();
-
-    for (key, value) in era_vm.state.storage_changes().into_iter() {
-        if storage.storage.get(key) != Some(value) {
-            let mut bytes: [u8; 32] = [0; 32];
-            value.to_big_endian(&mut bytes);
-            storage_changes.insert(
-                StorageKey {
-                    address: key.address,
-                    key: key.key,
-                },
-                H256::from(bytes),
-            );
-        }
-
-        if key.address
-            == *zkevm_assembly::zkevm_opcode_defs::system_params::DEPLOYER_SYSTEM_CONTRACT_ADDRESS
-        {
-            let mut buffer = [0u8; 32];
-            key.key.to_big_endian(&mut buffer);
-            let deployed_address = web3::ethabi::Address::from_slice(&buffer[12..]);
-            if let Some(code) = known_contracts.get(&value) {
-                deployed_contracts.insert(deployed_address, code.clone());
-            }
-        }
-    }
 
     Ok((
         ExecutionResult {
