@@ -135,10 +135,11 @@ pub fn run_vm(
         entry_address,
         context_val.msg_sender,
         context_val.u128_value,
-        default_aa_code_hash.into(),
-        evm_interpreter_code_hash.into(),
+        default_aa_code_hash,
+        evm_interpreter_code_hash,
         0,
         false,
+        u32::MAX - 0x80000000,
     );
 
     if abi_params.is_constructor {
