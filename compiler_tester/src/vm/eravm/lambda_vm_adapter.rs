@@ -11,6 +11,7 @@ use anyhow::anyhow;
 use lambda_vm::execution::Execution;
 use lambda_vm::store::initial_decommit;
 use lambda_vm::store::InitialStorageMemory;
+use lambda_vm::tracers::blob_saver_tracer::BlobSaverTracer;
 use lambda_vm::value::TaggedValue;
 use lambda_vm::vm::ExecutionOutput;
 use lambda_vm::EraVM;
@@ -164,10 +165,13 @@ pub fn run_vm(
     );
 
     let mut era_vm = EraVM::new(vm, Rc::new(RefCell::new(storage.clone())));
-    let (result, blob_tracer) = match zkevm_assembly::get_encoding_mode() {
-        zkevm_assembly::RunningVmEncodingMode::Testing => era_vm.run_program_with_test_encode(),
+    let mut blob_tracer = BlobSaverTracer::new();
+    let result = match zkevm_assembly::get_encoding_mode() {
+        zkevm_assembly::RunningVmEncodingMode::Testing => {
+            era_vm.run_program_with_test_encode(Some(&mut blob_tracer))
+        }
         zkevm_assembly::RunningVmEncodingMode::Production => {
-            era_vm.run_program_with_custom_bytecode()
+            era_vm.run_program_with_custom_bytecode(Some(&mut blob_tracer))
         }
     };
     let events = merge_events(&era_vm.state.events());
