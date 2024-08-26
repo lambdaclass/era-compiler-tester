@@ -229,7 +229,7 @@ pub fn run_vm(
         ExecutionResult {
             output,
             cycles: 0,
-            ergs: (initial_gas - era_vm.state.current_frame()?.gas_left.0).into(),
+            ergs: (initial_gas - era_vm.execution.current_frame()?.gas_left.0).into(),
             gas: 0,
         },
         storage_changes,
