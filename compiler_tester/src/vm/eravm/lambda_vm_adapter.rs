@@ -168,10 +168,10 @@ pub fn run_vm(
     let mut blob_tracer = BlobSaverTracer::new();
     let result = match zkevm_assembly::get_encoding_mode() {
         zkevm_assembly::RunningVmEncodingMode::Testing => {
-            era_vm.run_program_with_test_encode_and_tracer(Some(&mut blob_tracer))
+            era_vm.run_program_with_test_encode_and_tracer(&mut blob_tracer)
         }
         zkevm_assembly::RunningVmEncodingMode::Production => {
-            era_vm.run_program_with_custom_bytecode_and_tracer(Some(&mut blob_tracer))
+            era_vm.run_program_with_custom_bytecode_and_tracer(&mut blob_tracer)
         }
     };
     let events = merge_events(&era_vm.state.events());
