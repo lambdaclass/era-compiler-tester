@@ -142,6 +142,8 @@ pub fn run_vm(
         u32::MAX - 0x80000000,
     );
 
+    let initial_gas = vm.current_frame()?.gas_left.0;
+
     if abi_params.is_constructor {
         let r1_with_constructor_bit = vm.get_register(1).value | 1.into();
         vm.set_register(2, TaggedValue::new_raw_integer(r1_with_constructor_bit));
@@ -227,7 +229,7 @@ pub fn run_vm(
         ExecutionResult {
             output,
             cycles: 0,
-            ergs: 0,
+            ergs: (initial_gas - era_vm.execution.current_frame()?.gas_left.0).into(),
             gas: 0,
         },
         storage_changes,
