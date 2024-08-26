@@ -8,12 +8,9 @@ use std::collections::HashMap;
 
 use crate::vm::execution_result::ExecutionResult;
 use anyhow::anyhow;
-use lambda_vm::state::VMState;
+use lambda_vm::execution::Execution;
 use lambda_vm::store::initial_decommit;
-use lambda_vm::store::ContractStorageMemory;
-use lambda_vm::store::InitialStorage;
 use lambda_vm::store::InitialStorageMemory;
-use lambda_vm::store::StateStorage;
 use lambda_vm::value::TaggedValue;
 use lambda_vm::vm::ExecutionOutput;
 use lambda_vm::EraVM;
@@ -119,22 +116,20 @@ pub fn run_vm(
     }
 
     lambda_contract_storage.extend(blobs);
-    let initial_storage = InitialStorageMemory {
-        initial_storage: lambda_storage,
+    let mut storage = InitialStorageMemory {
+        storage: lambda_storage,
+        contracts: lambda_contract_storage,
     };
-    let contract_storage = ContractStorageMemory {
-        contract_storage: lambda_contract_storage,
-    };
+
     let initial_program = initial_decommit(
-        &initial_storage,
-        &contract_storage,
+        &mut storage,
         entry_address,
         evm_interpreter_code_hash.into(),
     )?;
 
     let context_val = context.unwrap();
 
-    let mut vm = VMState::new(
+    let mut vm = Execution::new(
         initial_program,
         calldata.to_vec(),
         entry_address,
@@ -144,6 +139,7 @@ pub fn run_vm(
         evm_interpreter_code_hash.into(),
         0,
         false,
+        u32::MAX - 0x80000000,
     );
 
     let initial_gas = vm.current_frame()?.gas_left.0;
@@ -169,18 +165,14 @@ pub fn run_vm(
         TaggedValue::new_raw_integer(abi_params.r5_value.unwrap_or_default()),
     );
 
-    let mut era_vm = EraVM::new(
-        vm,
-        Rc::new(RefCell::new(initial_storage.clone())),
-        Rc::new(RefCell::new(contract_storage)),
-    );
+    let mut era_vm = EraVM::new(vm, Rc::new(RefCell::new(storage.clone())));
     let (result, blob_tracer) = match zkevm_assembly::get_encoding_mode() {
         zkevm_assembly::RunningVmEncodingMode::Testing => era_vm.run_program_with_test_encode(),
         zkevm_assembly::RunningVmEncodingMode::Production => {
             era_vm.run_program_with_custom_bytecode()
         }
     };
-    let events = merge_events(&era_vm.state.events);
+    let events = merge_events(&era_vm.state.events());
     let output = match result {
         ExecutionOutput::Ok(output) => Output {
             return_data: chunk_return_data(&output),
@@ -208,8 +200,8 @@ pub fn run_vm(
     };
     let deployed_blobs = blob_tracer.blobs.clone();
 
-    for (key, value) in era_vm.state_storage.storage_changes.into_iter() {
-        if initial_storage.storage_read(key.clone())? != Some(value.clone()) {
+    for (key, value) in era_vm.state.storage_changes().into_iter() {
+        if storage.storage.get(key) != Some(value) {
             let mut bytes: [u8; 32] = [0; 32];
             value.to_big_endian(&mut bytes);
             storage_changes.insert(
