@@ -11,7 +11,11 @@ pub mod system_contracts;
 #[cfg(feature = "vm2")]
 mod vm2_adapter;
 
+#[cfg(feature = "lambda_vm")]
+mod lambda_vm_adapter;
+
 use std::collections::HashMap;
+use std::ops::Add;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -25,6 +29,7 @@ use crate::vm::execution_result::ExecutionResult;
 
 use self::system_context::SystemContext;
 use self::system_contracts::SystemContracts;
+use self::system_contracts::ADDRESS_EVM_GAS_MANAGER;
 
 ///
 /// The EraVM interface.
@@ -52,6 +57,14 @@ impl EraVM {
 
     /// The extra amount of gas consumed by every call to the EVM interpreter.
     pub const EVM_INTERPRETER_GAS_OVERHEAD: u64 = 2500;
+
+    /// The `evmStackFrames` variable storage slot in the `EvmGasManager` contract.
+    pub const EVM_GAS_MANAGER_STACK_FRAME_SLOT: u64 = 2;
+
+    /// The first `evmStackFrames` array element storage slot in the `EvmGasManager` contract.
+    /// (keccak256(uit256(2)))
+    pub const EVM_GAS_MANAGER_FIRST_STACK_FRAME: &'static str =
+        "0x405787fa12a823e0f2b7631cc41b3ba8828b3321ca811111fa75cd3aa3bb5ace";
 
     ///
     /// Creates and initializes a new EraVM instance.
@@ -228,7 +241,7 @@ impl EraVM {
             0,
         );
 
-        #[cfg(not(feature = "vm2"))]
+        #[cfg(not(any(feature = "vm2", feature = "lambda_vm")))]
         {
             let snapshot = zkevm_tester::runners::compiler_tests::run_vm_multi_contracts(
                 trace_file_path.to_string_lossy().to_string(),
@@ -294,6 +307,99 @@ impl EraVM {
 
             Ok(result)
         }
+        #[cfg(feature = "lambda_vm")]
+        {
+            let (result, storage_changes, deployed_contracts, deployed_blobs) =
+                lambda_vm_adapter::run_vm(
+                    self.deployed_contracts.clone(),
+                    self.published_evm_bytecodes.clone(),
+                    &calldata,
+                    self.storage.clone(),
+                    entry_address,
+                    Some(context),
+                    vm_launch_option,
+                    self.known_contracts.clone(),
+                    self.default_aa_code_hash,
+                    self.evm_interpreter_code_hash,
+                )
+                .map_err(|error| anyhow::anyhow!("EraVM failure: {}", error))?;
+
+            for (key, value) in storage_changes.into_iter() {
+                self.storage.insert(key, value);
+            }
+            for (address, assembly) in deployed_contracts.into_iter() {
+                if self.deployed_contracts.contains_key(&address) {
+                    continue;
+                }
+
+                self.deployed_contracts.insert(address, assembly);
+            }
+
+            self.published_evm_bytecodes.extend(deployed_blobs);
+
+            Ok(result)
+        }
+    }
+
+    ///
+    /// Executes a contract simulating EVM to EVM call, which gives the ability to measure the amount of gas used.
+    ///
+    pub fn execute_evm_interpreter<const M: bool>(
+        &mut self,
+        test_name: String,
+        entry_address: web3::types::Address,
+        caller: web3::types::Address,
+        value: Option<u128>,
+        calldata: Vec<u8>,
+        vm_launch_option: Option<zkevm_tester::runners::compiler_tests::VmLaunchOption>,
+    ) -> anyhow::Result<ExecutionResult> {
+        // set `evmStackFrames` size to 1
+        self.storage.insert(
+            zkevm_tester::runners::compiler_tests::StorageKey {
+                address: web3::types::Address::from_low_u64_be(ADDRESS_EVM_GAS_MANAGER.into()),
+                key: web3::types::U256::from(Self::EVM_GAS_MANAGER_STACK_FRAME_SLOT),
+            },
+            web3::types::H256::from_low_u64_be(1),
+        );
+
+        // set `evmStackFrames[0].isStatic` size to false
+        self.storage.insert(
+            zkevm_tester::runners::compiler_tests::StorageKey {
+                address: web3::types::Address::from_low_u64_be(ADDRESS_EVM_GAS_MANAGER.into()),
+                key: web3::types::U256::from(Self::EVM_GAS_MANAGER_FIRST_STACK_FRAME),
+            },
+            web3::types::H256::zero(),
+        );
+
+        // set `evmStackFrames[0].passGas` size to 2^24
+        self.storage.insert(
+            zkevm_tester::runners::compiler_tests::StorageKey {
+                address: web3::types::Address::from_low_u64_be(ADDRESS_EVM_GAS_MANAGER.into()),
+                key: web3::types::U256::from(Self::EVM_GAS_MANAGER_FIRST_STACK_FRAME).add(1),
+            },
+            web3::types::H256::from_low_u64_be(1 << 24),
+        );
+
+        let mut result = self.execute::<M>(
+            test_name,
+            entry_address,
+            caller,
+            value,
+            calldata,
+            vm_launch_option,
+        )?;
+        if result.output.return_data.is_empty() {
+            anyhow::bail!("Return data is empty");
+        }
+        let gas_left = result
+            .output
+            .return_data
+            .remove(0)
+            .unwrap_certain_as_ref()
+            .as_u64();
+        result.gas = (1 << 24) - gas_left;
+
+        Ok(result)
     }
 
     ///

@@ -7,7 +7,7 @@ pub mod mode;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 
-use sha3::Digest;
+use era_compiler_solidity::CollectableError;
 
 use crate::compilers::mode::Mode;
 use crate::compilers::Compiler;
@@ -43,6 +43,7 @@ impl Compiler for LLVMCompiler {
         sources: Vec<(String, String)>,
         _libraries: BTreeMap<String, BTreeMap<String, String>>,
         mode: &Mode,
+        llvm_options: Vec<String>,
         debug_config: Option<era_compiler_llvm_context::DebugConfig>,
     ) -> anyhow::Result<EraVMInput> {
         let mode = LLVMMode::unwrap(mode);
@@ -53,34 +54,35 @@ impl Compiler for LLVMCompiler {
             .0
             .clone();
 
-        let builds = sources
+        let project = era_compiler_solidity::Project::try_from_llvm_ir_sources(
+            sources.into_iter().collect(),
+            None,
+        )?;
+
+        let build = project.compile_to_eravm(
+            &mut vec![],
+            true,
+            true,
+            zkevm_assembly::get_encoding_mode(),
+            mode.llvm_optimizer_settings.to_owned(),
+            llvm_options,
+            true,
+            None,
+            debug_config.clone(),
+        )?;
+        build.collect_errors()?;
+        let builds = build
+            .contracts
             .into_iter()
-            .map(|(path, source)| {
-                let llvm = inkwell::context::Context::create();
-                let memory_buffer =
-                    inkwell::memory_buffer::MemoryBuffer::create_from_memory_range_copy(
-                        source.as_bytes(),
-                        path.as_str(),
-                    );
-                let module = llvm
-                    .create_module_from_ir(memory_buffer)
-                    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-                let optimizer =
-                    era_compiler_llvm_context::Optimizer::new(mode.llvm_optimizer_settings.clone());
-                let source_hash = sha3::Keccak256::digest(source.as_bytes()).into();
-
-                let context = era_compiler_llvm_context::EraVMContext::<
-                    era_compiler_llvm_context::EraVMDummyDependency,
-                >::new(
-                    &llvm, module, optimizer, None, true, debug_config.clone()
-                );
-                let build = context.build(path.as_str(), Some(source_hash))?;
+            .map(|(path, build)| {
+                let build = build.expect("Always valid");
                 let assembly = zkevm_assembly::Assembly::from_string(
-                    build.assembly_text,
-                    build.metadata_hash,
-                )?;
-                let build = EraVMBuild::new(assembly)?;
+                    build.build.assembly.expect("Always exists"),
+                    build.build.metadata_hash,
+                )
+                .map_err(anyhow::Error::new)?;
 
+                let build = EraVMBuild::new_with_hash(assembly, build.build.bytecode_hash)?;
                 Ok((path, build))
             })
             .collect::<anyhow::Result<HashMap<String, EraVMBuild>>>()?;
@@ -94,6 +96,7 @@ impl Compiler for LLVMCompiler {
         sources: Vec<(String, String)>,
         _libraries: BTreeMap<String, BTreeMap<String, String>>,
         mode: &Mode,
+        llvm_options: Vec<String>,
         debug_config: Option<era_compiler_llvm_context::DebugConfig>,
     ) -> anyhow::Result<EVMInput> {
         let mode = LLVMMode::unwrap(mode);
@@ -104,39 +107,32 @@ impl Compiler for LLVMCompiler {
             .0
             .clone();
 
-        let builds = sources
+        let project = era_compiler_solidity::Project::try_from_llvm_ir_sources(
+            sources.into_iter().collect(),
+            None,
+        )?;
+
+        let build = project.compile_to_evm(
+            &mut vec![],
+            mode.llvm_optimizer_settings.to_owned(),
+            llvm_options,
+            true,
+            None,
+            debug_config.clone(),
+        )?;
+        build.collect_errors()?;
+        let builds: HashMap<String, EVMBuild> = build
+            .contracts
             .into_iter()
-            .map(|(path, source)| {
-                let optimizer =
-                    era_compiler_llvm_context::Optimizer::new(mode.llvm_optimizer_settings.clone());
-                let source_hash = sha3::Keccak256::digest(source.as_bytes()).into();
-
-                let llvm = inkwell::context::Context::create();
-                let memory_buffer =
-                    inkwell::memory_buffer::MemoryBuffer::create_from_memory_range_copy(
-                        source.as_bytes(),
-                        path.as_str(),
-                    );
-                let module = llvm
-                    .create_module_from_ir(memory_buffer)
-                    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-                let context = era_compiler_llvm_context::EVMContext::<
-                    era_compiler_llvm_context::EVMDummyDependency,
-                >::new(
-                    &llvm,
-                    module,
-                    era_compiler_llvm_context::CodeType::Runtime,
-                    optimizer,
-                    None,
-                    true,
-                    debug_config.clone(),
+            .map(|(path, build)| {
+                let build = build.expect("Always valid");
+                let build = EVMBuild::new(
+                    era_compiler_llvm_context::EVMBuild::default(),
+                    build.runtime_build,
                 );
-                let build = context.build(path.as_str(), Some(source_hash))?;
-
-                let build = EVMBuild::new(era_compiler_llvm_context::EVMBuild::default(), build);
-                Ok((path, build))
+                (path, build)
             })
-            .collect::<anyhow::Result<HashMap<String, EVMBuild>>>()?;
+            .collect();
 
         Ok(EVMInput::new(builds, None, last_contract))
     }

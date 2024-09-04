@@ -108,7 +108,11 @@ impl MatterLabsTest {
         }
 
         let sources = if metadata.contracts.is_empty() {
-            vec![(path.to_string_lossy().to_string(), main_file_string)]
+            if path.ends_with("test.json") {
+                vec![]
+            } else {
+                vec![(path.to_string_lossy().to_string(), main_file_string)]
+            }
         } else {
             let mut sources = HashMap::new();
             let mut paths = HashSet::with_capacity(metadata.contracts.len());
@@ -210,28 +214,6 @@ impl MatterLabsTest {
     }
 
     ///
-    /// Adds the Benchmark contract as a proxy for the EVM interpreter.
-    ///
-    fn push_benchmark_caller(
-        &self,
-        sources: &mut Vec<(String, String)>,
-        contracts: &mut BTreeMap<String, String>,
-    ) -> anyhow::Result<()> {
-        let benchmark_caller_string = std::fs::read_to_string(PathBuf::from(
-            "tests/solidity/complex/interpreter/Benchmark.sol",
-        ))?;
-        sources.push((
-            "tests/solidity/complex/interpreter/Benchmark.sol".to_owned(),
-            benchmark_caller_string,
-        )); // TODO
-        contracts.insert(
-            "Benchmark".to_owned(),
-            "tests/solidity/complex/interpreter/Benchmark.sol:Benchmark".to_owned(),
-        );
-        Ok(())
-    }
-
-    ///
     /// Returns library information.
     ///
     fn get_libraries<API>(
@@ -280,7 +262,8 @@ impl MatterLabsTest {
         let mut instances = BTreeMap::new();
 
         for (instance, evm_contract) in self.metadata.evm_contracts.iter() {
-            let runtime_code = evm_contract.runtime_code();
+            let instruction_name = instance.split('_').next().expect("Always exists");
+            let runtime_code = evm_contract.runtime_code(instruction_name);
             let mut bytecode = evm_contract.init_code(runtime_code.len());
             bytecode.push_str(runtime_code.as_str());
 
@@ -310,15 +293,18 @@ impl MatterLabsTest {
             .metadata
             .evm_contracts
             .keys()
-            .filter(|name| name.contains("Template") || name.contains("Full"))
+            .filter(|name| {
+                name.contains("Template") || name.contains("Full") || name.contains("Before")
+            })
             .cloned()
             .collect();
         evm_contracts.sort();
 
-        let mut metadata_cases = Vec::with_capacity(evm_contracts.len() / 2);
-        for pair_of_bytecodes in evm_contracts.chunks(2) {
-            let full = &pair_of_bytecodes[0];
-            let template = &pair_of_bytecodes[1];
+        let mut metadata_cases = Vec::with_capacity(evm_contracts.len() / 3);
+        for pair_of_bytecodes in evm_contracts.chunks(3) {
+            let before = &pair_of_bytecodes[0];
+            let full = &pair_of_bytecodes[1];
+            let template = &pair_of_bytecodes[2];
             let exception = full.contains("REVERT");
 
             metadata_cases.push(MatterLabsCase {
@@ -331,13 +317,10 @@ impl MatterLabsTest {
                 inputs: vec![
                     MatterLabsCaseInput {
                         comment: None,
-                        instance: "Proxy".to_owned(),
+                        instance: before.to_owned(),
                         caller: default_caller_address(),
                         method: "#fallback".to_owned(),
-                        calldata: MatterLabsCaseInputCalldata::List(vec![
-                            "Benchmark.address".to_owned(),
-                            format!("{template}.address"),
-                        ]),
+                        calldata: MatterLabsCaseInputCalldata::List(vec![]),
                         value: None,
                         storage: HashMap::new(),
                         expected: Some(
@@ -348,13 +331,24 @@ impl MatterLabsTest {
                     },
                     MatterLabsCaseInput {
                         comment: None,
-                        instance: "Proxy".to_owned(),
+                        instance: template.to_owned(),
                         caller: default_caller_address(),
                         method: "#fallback".to_owned(),
-                        calldata: MatterLabsCaseInputCalldata::List(vec![
-                            "Benchmark.address".to_owned(),
-                            format!("{full}.address"),
-                        ]),
+                        calldata: MatterLabsCaseInputCalldata::List(vec![]),
+                        value: None,
+                        storage: HashMap::new(),
+                        expected: Some(
+                            MatterLabsCaseInputExpected::successful_evm_interpreter_benchmark(
+                                false,
+                            ),
+                        ),
+                    },
+                    MatterLabsCaseInput {
+                        comment: None,
+                        instance: full.to_owned(),
+                        caller: default_caller_address(),
+                        method: "#fallback".to_owned(),
+                        calldata: MatterLabsCaseInputCalldata::List(vec![]),
                         value: None,
                         storage: HashMap::new(),
                         expected: Some(
@@ -385,7 +379,7 @@ impl Buildable for MatterLabsTest {
         filters: &Filters,
         debug_config: Option<era_compiler_llvm_context::DebugConfig>,
     ) -> Option<Test> {
-        mode.set_system_mode(self.metadata.system_mode);
+        mode.enable_eravm_extensions(self.metadata.enable_eravm_extensions);
 
         self.check_filters(filters, &mode)?;
 
@@ -404,9 +398,10 @@ impl Buildable for MatterLabsTest {
                 self.sources.clone(),
                 libraries,
                 &mode,
+                vec![],
                 debug_config,
             )
-            .map_err(|error| anyhow::anyhow!("Failed to compile sources: {}", error))
+            .map_err(|error| anyhow::anyhow!("Failed to compile sources:\n{error}"))
         {
             Ok(vm_input) => vm_input,
             Err(error) => {
@@ -516,16 +511,7 @@ impl Buildable for MatterLabsTest {
 
         let mut contracts = self.metadata.contracts.clone();
         self.push_default_contract(&mut contracts, compiler.allows_multi_contract_files());
-        let sources = if let Target::EVMInterpreter = target {
-            let mut sources = self.sources.to_owned();
-            if let Err(error) = self.push_benchmark_caller(&mut sources, &mut contracts) {
-                Summary::invalid(summary, None, self.identifier.to_owned(), error);
-                return None;
-            }
-            sources
-        } else {
-            self.sources.to_owned()
-        };
+        let sources = self.sources.to_owned();
 
         let mut evm_address_iterator =
             EVMAddressIterator::new(matches!(target, Target::EVMInterpreter));
@@ -538,9 +524,10 @@ impl Buildable for MatterLabsTest {
                 sources,
                 libraries,
                 &mode,
+                vec![],
                 debug_config,
             )
-            .map_err(|error| anyhow::anyhow!("Failed to compile sources: {}", error))
+            .map_err(|error| anyhow::anyhow!("Failed to compile sources:\n{error}"))
         {
             Ok(output) => output,
             Err(error) => {

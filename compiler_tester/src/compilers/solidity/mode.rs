@@ -23,8 +23,8 @@ pub struct Mode {
     pub solc_optimize: bool,
     /// The optimizer settings.
     pub llvm_optimizer_settings: era_compiler_llvm_context::OptimizerSettings,
-    /// The system mode.
-    pub is_system_mode: bool,
+    /// Whether the EraVM extensions are enabled.
+    pub enable_eravm_extensions: bool,
     /// The system contract mode.
     pub is_system_contracts_mode: bool,
 }
@@ -39,7 +39,7 @@ impl Mode {
         via_ir: bool,
         solc_optimize: bool,
         mut llvm_optimizer_settings: era_compiler_llvm_context::OptimizerSettings,
-        is_system_mode: bool,
+        enable_eravm_extensions: bool,
         is_system_contracts_mode: bool,
     ) -> Self {
         let llvm_options = LLVMOptions::get();
@@ -52,7 +52,7 @@ impl Mode {
             via_ir,
             solc_optimize,
             llvm_optimizer_settings,
-            is_system_mode,
+            enable_eravm_extensions,
             is_system_contracts_mode,
         }
     }
@@ -134,7 +134,7 @@ impl std::fmt::Display for Mode {
             "{}{}{} {}",
             match self.solc_pipeline {
                 era_compiler_solidity::SolcPipeline::Yul => "Y",
-                era_compiler_solidity::SolcPipeline::EVMLA if self.via_ir => "y",
+                era_compiler_solidity::SolcPipeline::EVMLA if self.via_ir => "I",
                 era_compiler_solidity::SolcPipeline::EVMLA => "E",
             },
             if self.solc_optimize { '+' } else { '-' },

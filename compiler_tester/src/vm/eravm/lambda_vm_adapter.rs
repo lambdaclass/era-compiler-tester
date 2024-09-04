@@ -8,12 +8,19 @@ use std::collections::HashMap;
 
 use crate::vm::execution_result::ExecutionResult;
 use anyhow::anyhow;
-use vm2::initial_decommit;
-use vm2::ExecutionEnd;
-use vm2::Program;
-use vm2::World;
+use lambda_vm::execution::Execution;
+use lambda_vm::store::initial_decommit;
+use lambda_vm::store::InitialStorageMemory;
+use lambda_vm::tracers::blob_saver_tracer::BlobSaverTracer;
+use lambda_vm::value::TaggedValue;
+use lambda_vm::vm::ExecutionOutput;
+use lambda_vm::EraVM;
+use std::cell::RefCell;
+use std::rc::Rc;
+use web3::types::H160;
+use zkevm_assembly::zkevm_opcode_defs::decoding::{EncodingModeProduction, EncodingModeTesting};
 use zkevm_assembly::Assembly;
-use zkevm_opcode_defs::ethereum_types::{BigEndianHash, H256, U256};
+use zkevm_opcode_defs::ethereum_types::{H256, U256};
 use zkevm_tester::runners::compiler_tests::FullABIParams;
 use zkevm_tester::runners::compiler_tests::StorageKey;
 use zkevm_tester::runners::compiler_tests::VmExecutionContext;
@@ -24,8 +31,15 @@ use crate::test::case::input::{
     value::Value,
 };
 
+pub fn address_into_u256(address: H160) -> U256 {
+    let mut buffer = [0; 32];
+    buffer[12..].copy_from_slice(address.as_bytes());
+    U256::from_big_endian(&buffer)
+}
+
 pub fn run_vm(
     contracts: HashMap<web3::ethabi::Address, Assembly>,
+    blobs: HashMap<U256, Vec<U256>>,
     calldata: &[u8],
     storage: HashMap<StorageKey, H256>,
     entry_address: web3::ethabi::Address,
@@ -38,6 +52,7 @@ pub fn run_vm(
     ExecutionResult,
     HashMap<StorageKey, H256>,
     HashMap<web3::ethabi::Address, Assembly>,
+    HashMap<U256, Vec<U256>>,
 )> {
     let abi_params = match vm_launch_option {
         VmLaunchOption::Call => FullABIParams {
@@ -58,174 +73,181 @@ pub fn run_vm(
         x => return Err(anyhow!("Unsupported launch option {x:?}")),
     };
 
-    for (_, contract) in contracts {
-        let bytecode = contract.clone().compile_to_bytecode()?;
-        let hash = zkevm_assembly::zkevm_opcode_defs::bytecode_to_code_hash(&bytecode)
-            .map_err(|()| anyhow!("Failed to hash bytecode"))?;
-        known_contracts.insert(U256::from_big_endian(&hash), contract);
-    }
-
-    let context = context.unwrap_or_default();
-
-    let mut world = TestWorld {
-        storage,
-        contracts: known_contracts.clone(),
-    };
-    let initial_program = initial_decommit(&mut world, entry_address);
-
-    let mut vm = vm2::VirtualMachine::new(
-        entry_address,
-        initial_program,
-        context.msg_sender,
-        calldata.to_vec(),
-        // zkevm_tester subtracts this constant, I don't know why
-        u32::MAX - 0x80000000,
-        vm2::Settings {
-            default_aa_code_hash: default_aa_code_hash.into(),
-            evm_interpreter_code_hash: evm_interpreter_code_hash.into(),
-            hook_address: 0,
-        },
-    );
-
-    if abi_params.is_constructor {
-        vm.state.registers[2] |= 1.into();
-    }
-    if abi_params.is_system_call {
-        vm.state.registers[2] |= 2.into();
-    }
-    vm.state.registers[3] = abi_params.r3_value.unwrap_or_default();
-    vm.state.registers[4] = abi_params.r4_value.unwrap_or_default();
-    vm.state.registers[5] = abi_params.r5_value.unwrap_or_default();
-
     let mut storage_changes = HashMap::new();
     let mut deployed_contracts = HashMap::new();
 
-    let output = match vm.run(&mut world) {
-        ExecutionEnd::ProgramFinished(return_value) => {
+    let mut lambda_storage: HashMap<lambda_vm::store::StorageKey, U256> = HashMap::new();
+    for (key, value) in storage {
+        let value_bits = value.as_bytes();
+        let value_u256 = U256::from_big_endian(&value_bits);
+        let lambda_storage_key = lambda_vm::store::StorageKey::new(key.address, key.key);
+        lambda_storage.insert(lambda_storage_key, value_u256);
+    }
+
+    let bytecode_to_hash = match zkevm_assembly::get_encoding_mode() {
+        zkevm_assembly::RunningVmEncodingMode::Testing => |bytecode: &[[u8; 32]]| {
+            zkevm_assembly::zkevm_opcode_defs::bytecode_to_code_hash_for_mode::<
+                16,
+                EncodingModeTesting,
+            >(bytecode)
+        },
+        zkevm_assembly::RunningVmEncodingMode::Production => |bytecode: &[[u8; 32]]| {
+            zkevm_assembly::zkevm_opcode_defs::bytecode_to_code_hash_for_mode::<
+                8,
+                EncodingModeProduction,
+            >(bytecode)
+        },
+    };
+
+    for (key, mut contract) in contracts {
+        let bytecode = contract.compile_to_bytecode()?;
+        let hash = bytecode_to_hash(&bytecode).map_err(|()| anyhow!("Failed to hash bytecode"))?;
+        known_contracts.insert(U256::from_big_endian(&hash), contract);
+    }
+
+    let mut lambda_contract_storage: HashMap<U256, Vec<U256>> = HashMap::new();
+    for (key, value) in known_contracts.clone() {
+        let bytecode = value.clone().compile_to_bytecode()?;
+        let bytecode_u256 = bytecode
+            .iter()
+            .map(|raw_opcode| U256::from_big_endian(raw_opcode))
+            .collect();
+
+        lambda_contract_storage.insert(key, bytecode_u256);
+    }
+
+    lambda_contract_storage.extend(blobs);
+    let mut storage = InitialStorageMemory {
+        storage: lambda_storage,
+        contracts: lambda_contract_storage,
+    };
+
+    let initial_program = initial_decommit(
+        &mut storage,
+        entry_address,
+        evm_interpreter_code_hash.into(),
+    )?;
+
+    let context_val = context.unwrap();
+
+    let mut vm = Execution::new(
+        initial_program,
+        calldata.to_vec(),
+        entry_address,
+        context_val.msg_sender,
+        context_val.u128_value,
+        default_aa_code_hash.into(),
+        evm_interpreter_code_hash.into(),
+        0,
+        false,
+        u32::MAX - 0x80000000,
+    );
+
+    let initial_gas = vm.current_frame()?.gas_left.0;
+
+    if abi_params.is_constructor {
+        let r1_with_constructor_bit = vm.get_register(1).value | 1.into();
+        vm.set_register(2, TaggedValue::new_raw_integer(r1_with_constructor_bit));
+    }
+    if abi_params.is_system_call {
+        let r1_with_system_bit = vm.get_register(1).value | 2.into();
+        vm.set_register(2, TaggedValue::new_raw_integer(r1_with_system_bit));
+    }
+    vm.set_register(
+        3,
+        TaggedValue::new_raw_integer(abi_params.r3_value.unwrap_or_default()),
+    );
+    vm.set_register(
+        4,
+        TaggedValue::new_raw_integer(abi_params.r4_value.unwrap_or_default()),
+    );
+    vm.set_register(
+        5,
+        TaggedValue::new_raw_integer(abi_params.r5_value.unwrap_or_default()),
+    );
+
+    let mut era_vm = EraVM::new(vm);
+    let mut blob_tracer = BlobSaverTracer::new();
+    let result = match zkevm_assembly::get_encoding_mode() {
+        zkevm_assembly::RunningVmEncodingMode::Testing => {
+            era_vm.run_program_with_test_encode_and_tracer(&mut blob_tracer, &mut storage)
+        }
+        zkevm_assembly::RunningVmEncodingMode::Production => {
+            era_vm.run_program_with_custom_bytecode_and_tracer(&mut blob_tracer,  &mut storage)
+        }
+    };
+    let events = merge_events(&era_vm.state.events());
+    let output = match result {
+        ExecutionOutput::Ok(output) => {
             // Only successful transactions can have side effects
             // The VM doesn't undo side effects done in the initial frame
-            // because that would mess with the bootloader.
+            for (key, value) in era_vm.state.storage_changes().into_iter() {
+                if storage.storage.get(key) != Some(value) {
+                    let mut bytes: [u8; 32] = [0; 32];
+                    value.to_big_endian(&mut bytes);
+                    storage_changes.insert(
+                        StorageKey {
+                            address: key.address,
+                            key: key.key,
+                        },
+                        H256::from(bytes),
+                    );
+                }
 
-            storage_changes = vm
-                .world_diff
-                .get_storage_state()
-                .iter()
-                .map(|(&(address, key), (_, value))| {
-                    (StorageKey { address, key }, H256::from_uint(value))
-                })
-                .collect::<HashMap<_, _>>();
-            deployed_contracts = vm
-                .world_diff
-                .get_storage_state()
-                .iter()
-                .filter_map(|((address, key), (_, value))| {
-                    if *address == *zkevm_assembly::zkevm_opcode_defs::system_params::DEPLOYER_SYSTEM_CONTRACT_ADDRESS {
-                        let mut buffer = [0u8; 32];
-                        key.to_big_endian(&mut buffer);
-                        let deployed_address = web3::ethabi::Address::from_slice(&buffer[12..]);
-                        if let Some(code) = known_contracts.get(&value) {
-                            Some((deployed_address, code.clone()))
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
+                if key.address == *zkevm_assembly::zkevm_opcode_defs::system_params::DEPLOYER_SYSTEM_CONTRACT_ADDRESS
+                {
+                    let mut buffer = [0u8; 32];
+                    key.key.to_big_endian(&mut buffer);
+                    let deployed_address = web3::ethabi::Address::from_slice(&buffer[12..]);
+                    if let Some(code) = known_contracts.get(&value) {
+                        deployed_contracts.insert(deployed_address, code.clone());
                     }
-                })
-                .collect::<HashMap<_, _>>();
+                }
+            }
 
             Output {
-                return_data: chunk_return_data(&return_value),
+                return_data: chunk_return_data(&output),
                 exception: false,
-                events: merge_events(vm.world_diff.events()),
+                events,
             }
         }
-        ExecutionEnd::Reverted(return_value) => Output {
-            return_data: chunk_return_data(&return_value),
+        ExecutionOutput::Revert(output) => Output {
+            return_data: chunk_return_data(&output),
             exception: true,
             events: vec![],
         },
-        ExecutionEnd::Panicked => Output {
+        ExecutionOutput::Panic => Output {
             return_data: vec![],
             exception: true,
             events: vec![],
         },
-        ExecutionEnd::SuspendedOnHook { .. } => unreachable!(),
+        ExecutionOutput::SuspendedOnHook {
+            hook,
+            pc_to_resume_from,
+        } => Output {
+            return_data: vec![],
+            exception: true,
+            events: vec![],
+        },
     };
+    let deployed_blobs = blob_tracer.blobs.clone();
 
     Ok((
         ExecutionResult {
             output,
             cycles: 0,
-            ergs: 0,
+            ergs: (initial_gas - era_vm.execution.current_frame()?.gas_left.0).into(),
             gas: 0,
         },
         storage_changes,
         deployed_contracts,
+        deployed_blobs,
     ))
 }
 
 struct TestWorld {
     storage: HashMap<StorageKey, H256>,
     contracts: HashMap<U256, Assembly>,
-}
-
-impl World for TestWorld {
-    fn decommit(&mut self, hash: U256) -> Program {
-        let Some(bytecode) = self
-            .contracts
-            .get(&hash)
-            .map(|assembly| assembly.clone().compile_to_bytecode().unwrap())
-        else {
-            // This case only happens when a contract fails to deploy but the assumes it did deploy
-            return Program::new(vec![vm2::Instruction::from_invalid()], vec![]);
-        };
-        let instructions = bytecode
-            .iter()
-            .flat_map(|x| {
-                x.chunks(8)
-                    .map(|x| u64::from_be_bytes(x.try_into().unwrap()))
-            })
-            .collect::<Vec<_>>();
-
-        Program::new(
-            vm2::decode::decode_program(&instructions, false),
-            bytecode
-                .iter()
-                .map(|x| U256::from_big_endian(x))
-                .collect::<Vec<_>>(),
-        )
-    }
-
-    fn read_storage(
-        &mut self,
-        contract: zkevm_opcode_defs::ethereum_types::H160,
-        key: U256,
-    ) -> U256 {
-        self.storage
-            .get(&StorageKey {
-                address: contract,
-                key,
-            })
-            .map(|h| h.into_uint())
-            .unwrap_or(U256::zero())
-    }
-
-    fn cost_of_writing_storage(
-        &mut self,
-        contract: web3::types::H160,
-        key: U256,
-        new_value: U256,
-    ) -> u32 {
-        0
-    }
-
-    fn is_free_storage_slot(&self, contract: &web3::types::H160, key: &U256) -> bool {
-        self.storage.contains_key(&StorageKey {
-            address: *contract,
-            key: *key,
-        })
-    }
 }
 
 fn chunk_return_data(bytes: &[u8]) -> Vec<Value> {
@@ -243,7 +265,7 @@ fn chunk_return_data(bytes: &[u8]) -> Vec<Value> {
     res
 }
 
-fn merge_events(events: &[vm2::Event]) -> Vec<Event> {
+fn merge_events(events: &[lambda_vm::state::Event]) -> Vec<Event> {
     struct TmpEvent {
         topics: Vec<U256>,
         data: Vec<u8>,
@@ -254,7 +276,7 @@ fn merge_events(events: &[vm2::Event]) -> Vec<Event> {
     let mut current: Option<(usize, u32, TmpEvent)> = None;
 
     for message in events.into_iter() {
-        let vm2::Event {
+        let lambda_vm::state::Event {
             shard_id,
             is_first,
             tx_number,

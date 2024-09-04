@@ -6,7 +6,8 @@ pub mod mode;
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-use std::path::PathBuf;
+
+use era_compiler_solidity::CollectableError;
 
 use crate::compilers::mode::Mode;
 use crate::compilers::solidity::SolidityCompiler;
@@ -43,16 +44,20 @@ impl Compiler for YulCompiler {
         sources: Vec<(String, String)>,
         _libraries: BTreeMap<String, BTreeMap<String, String>>,
         mode: &Mode,
+        llvm_options: Vec<String>,
         debug_config: Option<era_compiler_llvm_context::DebugConfig>,
     ) -> anyhow::Result<EraVMInput> {
         let mode = YulMode::unwrap(mode);
 
-        let solc_validator = if mode.is_system_mode {
+        let solc_version = if mode.enable_eravm_extensions {
             None
         } else {
-            Some(SolidityCompiler::executable(
-                &era_compiler_solidity::SolcCompiler::LAST_SUPPORTED_VERSION,
-            )?)
+            Some(
+                SolidityCompiler::executable(
+                    &era_compiler_solidity::SolcCompiler::LAST_SUPPORTED_VERSION,
+                )?
+                .version,
+            )
         };
 
         let last_contract = sources
@@ -61,36 +66,38 @@ impl Compiler for YulCompiler {
             .0
             .clone();
 
-        let builds = sources
+        let project = era_compiler_solidity::Project::try_from_yul_sources(
+            sources.into_iter().collect(),
+            BTreeMap::new(),
+            None,
+            solc_version.as_ref(),
+            debug_config.as_ref(),
+        )?;
+
+        let build = project.compile_to_eravm(
+            &mut vec![],
+            mode.enable_eravm_extensions,
+            true,
+            zkevm_assembly::get_encoding_mode(),
+            mode.llvm_optimizer_settings.to_owned(),
+            llvm_options,
+            true,
+            None,
+            debug_config.clone(),
+        )?;
+        build.collect_errors()?;
+        let builds = build
+            .contracts
             .into_iter()
-            .map(|(path, source)| {
-                let project = era_compiler_solidity::Project::try_from_yul_string(
-                    PathBuf::from(path.as_str()).as_path(),
-                    source.as_str(),
-                    solc_validator.as_ref(),
-                )?;
-
-                let contract = project
-                    .compile_to_eravm(
-                        mode.llvm_optimizer_settings.to_owned(),
-                        mode.is_system_mode,
-                        true,
-                        zkevm_assembly::get_encoding_mode(),
-                        debug_config.clone(),
-                    )?
-                    .contracts
-                    .remove(path.as_str())
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("Contract `{}` not found in the Yul project", path)
-                    })?;
-
+            .map(|(path, build)| {
+                let build = build.expect("Always valid");
                 let assembly = zkevm_assembly::Assembly::from_string(
-                    contract.build.assembly_text,
-                    contract.build.metadata_hash,
+                    build.build.assembly.expect("Always exists"),
+                    build.build.metadata_hash,
                 )
                 .map_err(anyhow::Error::new)?;
 
-                let build = EraVMBuild::new_with_hash(assembly, contract.build.bytecode_hash)?;
+                let build = EraVMBuild::new_with_hash(assembly, build.build.bytecode_hash)?;
                 Ok((path, build))
             })
             .collect::<anyhow::Result<HashMap<String, EraVMBuild>>>()?;
@@ -104,13 +111,17 @@ impl Compiler for YulCompiler {
         sources: Vec<(String, String)>,
         _libraries: BTreeMap<String, BTreeMap<String, String>>,
         mode: &Mode,
+        llvm_options: Vec<String>,
         debug_config: Option<era_compiler_llvm_context::DebugConfig>,
     ) -> anyhow::Result<EVMInput> {
         let mode = YulMode::unwrap(mode);
 
-        let solc_validator = Some(SolidityCompiler::executable(
-            &era_compiler_solidity::SolcCompiler::LAST_SUPPORTED_VERSION,
-        )?);
+        let solc_version = Some(
+            SolidityCompiler::executable(
+                &era_compiler_solidity::SolcCompiler::LAST_SUPPORTED_VERSION,
+            )?
+            .version,
+        );
 
         let last_contract = sources
             .last()
@@ -118,31 +129,32 @@ impl Compiler for YulCompiler {
             .0
             .clone();
 
-        let builds = sources
+        let project = era_compiler_solidity::Project::try_from_yul_sources(
+            sources.into_iter().collect(),
+            BTreeMap::new(),
+            None,
+            solc_version.as_ref(),
+            debug_config.as_ref(),
+        )?;
+
+        let build = project.compile_to_evm(
+            &mut vec![],
+            mode.llvm_optimizer_settings.to_owned(),
+            llvm_options,
+            true,
+            None,
+            debug_config.clone(),
+        )?;
+        build.collect_errors()?;
+        let builds: HashMap<String, EVMBuild> = build
+            .contracts
             .into_iter()
-            .map(|(path, source)| {
-                let project = era_compiler_solidity::Project::try_from_yul_string(
-                    PathBuf::from(path.as_str()).as_path(),
-                    source.as_str(),
-                    solc_validator.as_ref(),
-                )?;
-
-                let contract = project
-                    .compile_to_evm(
-                        mode.llvm_optimizer_settings.to_owned(),
-                        true,
-                        debug_config.clone(),
-                    )?
-                    .contracts
-                    .remove(path.as_str())
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("Contract `{}` not found in the Yul project", path)
-                    })?;
-
-                let build = EVMBuild::new(contract.deploy_build, contract.runtime_build);
-                Ok((path, build))
+            .map(|(path, build)| {
+                let build = build.expect("Always valid");
+                let build = EVMBuild::new(build.deploy_build, build.runtime_build);
+                (path, build)
             })
-            .collect::<anyhow::Result<HashMap<String, EVMBuild>>>()?;
+            .collect();
 
         Ok(EVMInput::new(builds, None, last_contract))
     }

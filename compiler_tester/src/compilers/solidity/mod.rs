@@ -12,6 +12,8 @@ use std::path::Path;
 
 use itertools::Itertools;
 
+use era_compiler_solidity::CollectableError;
+
 use crate::compilers::cache::Cache;
 use crate::compilers::mode::Mode;
 use crate::compilers::Compiler;
@@ -100,17 +102,18 @@ impl SolidityCompiler {
     pub fn executable(
         version: &semver::Version,
     ) -> anyhow::Result<era_compiler_solidity::SolcCompiler> {
-        era_compiler_solidity::SolcCompiler::new(format!("{}/solc-{}", Self::DIRECTORY, version))
+        era_compiler_solidity::SolcCompiler::new(
+            format!("{}/solc-{}", Self::DIRECTORY, version).as_str(),
+        )
     }
 
     ///
     /// Returns the `solc` executable used to compile system contracts.
     ///
     pub fn system_contract_executable() -> anyhow::Result<era_compiler_solidity::SolcCompiler> {
-        era_compiler_solidity::SolcCompiler::new(format!(
-            "{}/solc-system-contracts",
-            Self::DIRECTORY
-        ))
+        era_compiler_solidity::SolcCompiler::new(
+            format!("{}/solc-system-contracts", Self::DIRECTORY).as_str(),
+        )
     }
 
     ///
@@ -172,24 +175,23 @@ impl SolidityCompiler {
         libraries: &BTreeMap<String, BTreeMap<String, String>>,
         mode: &SolidityMode,
     ) -> anyhow::Result<era_compiler_solidity::SolcStandardJsonOutput> {
-        let mut solc = if mode.is_system_contracts_mode {
+        let solc_compiler = if mode.is_system_contracts_mode {
             Self::system_contract_executable()
         } else {
             Self::executable(&mode.solc_version)
         }?;
 
-        let output_selection =
-            era_compiler_solidity::SolcStandardJsonInputSettingsSelection::new_required(
+        let mut output_selection =
+            era_compiler_solidity::SolcStandardJsonInputSettingsSelection::new_required(Some(
                 mode.solc_pipeline,
-            );
+            ));
+        output_selection.extend_with_eravm_assembly();
 
         let optimizer = era_compiler_solidity::SolcStandardJsonInputSettingsOptimizer::new(
             mode.solc_optimize,
             None,
             &mode.solc_version,
             false,
-            false,
-            None,
         );
 
         let evm_version = if mode.solc_version >= semver::Version::new(0, 8, 24)
@@ -200,7 +202,7 @@ impl SolidityCompiler {
             None
         };
 
-        let solc_input = era_compiler_solidity::SolcStandardJsonInput::try_from_sources(
+        let solc_input = era_compiler_solidity::SolcStandardJsonInput::try_from_solidity_sources(
             evm_version,
             sources.iter().cloned().collect(),
             libraries.clone(),
@@ -208,8 +210,13 @@ impl SolidityCompiler {
             output_selection,
             optimizer,
             None,
+            mode.solc_pipeline == era_compiler_solidity::SolcPipeline::EVMLA,
             mode.via_ir,
-            None,
+            mode.enable_eravm_extensions,
+            false,
+            vec![],
+            vec![],
+            vec![],
         )
         .map_err(|error| anyhow::anyhow!("Solidity standard JSON I/O error: {}", error))?;
 
@@ -219,9 +226,11 @@ impl SolidityCompiler {
             .to_string_lossy()
             .to_string();
 
-        solc.standard_json(
+        solc_compiler.standard_json(
             solc_input,
-            mode.solc_pipeline,
+            Some(mode.solc_pipeline),
+            Some(&sources.iter().cloned().collect()),
+            &mut vec![],
             None,
             vec![],
             Some(allow_paths),
@@ -343,6 +352,7 @@ impl Compiler for SolidityCompiler {
         sources: Vec<(String, String)>,
         libraries: BTreeMap<String, BTreeMap<String, String>>,
         mode: &Mode,
+        llvm_options: Vec<String>,
         debug_config: Option<era_compiler_llvm_context::DebugConfig>,
     ) -> anyhow::Result<EraVMInput> {
         let mode = SolidityMode::unwrap(mode);
@@ -350,22 +360,7 @@ impl Compiler for SolidityCompiler {
         let mut solc_output = self
             .standard_json_output_cached(test_path, &sources, &libraries, mode)
             .map_err(|error| anyhow::anyhow!("Solidity standard JSON I/O error: {}", error))?;
-
-        if let Some(errors) = solc_output.errors.as_deref() {
-            let mut has_errors = false;
-            let mut error_messages = Vec::with_capacity(errors.len());
-
-            for error in errors.iter() {
-                if error.severity.as_str() == "error" {
-                    has_errors = true;
-                    error_messages.push(error.formatted_message.to_owned());
-                }
-            }
-
-            if has_errors {
-                anyhow::bail!("`solc` errors found: {:?}", error_messages);
-            }
-        }
+        solc_output.collect_errors()?;
 
         let method_identifiers = Self::get_method_identifiers(&solc_output)
             .map_err(|error| anyhow::anyhow!("Failed to get method identifiers: {}", error))?;
@@ -373,30 +368,42 @@ impl Compiler for SolidityCompiler {
         let last_contract = Self::get_last_contract(&solc_output, &sources)
             .map_err(|error| anyhow::anyhow!("Failed to get the last contract: {}", error))?;
 
-        let project = solc_output.try_to_project(
+        let mut solc_compiler = if mode.is_system_contracts_mode {
+            SolidityCompiler::system_contract_executable()
+        } else {
+            SolidityCompiler::executable(&mode.solc_version)
+        }?;
+
+        let project = era_compiler_solidity::Project::try_from_solidity_sources(
             sources.into_iter().collect::<BTreeMap<String, String>>(),
             libraries,
             mode.solc_pipeline,
-            &era_compiler_solidity::SolcVersion::new_simple(mode.solc_version.to_owned()),
+            &mut solc_output,
+            &mut solc_compiler,
             debug_config.as_ref(),
         )?;
 
         let build = project.compile_to_eravm(
-            mode.llvm_optimizer_settings.to_owned(),
-            mode.is_system_mode,
+            &mut vec![],
+            mode.enable_eravm_extensions,
             false,
             zkevm_assembly::get_encoding_mode(),
+            mode.llvm_optimizer_settings.to_owned(),
+            llvm_options,
+            true,
+            None,
             debug_config,
         )?;
         build.write_to_standard_json(
             &mut solc_output,
-            &era_compiler_solidity::SolcVersion::new(
+            Some(&era_compiler_solidity::SolcVersion::new(
                 mode.solc_version.to_string(),
                 mode.solc_version.to_owned(),
                 None,
-            ),
+            )),
             &semver::Version::new(0, 0, 0),
         )?;
+        solc_output.collect_errors()?;
 
         let builds: HashMap<String, EraVMBuild> = solc_output
             .contracts
@@ -406,10 +413,9 @@ impl Compiler for SolidityCompiler {
                 file.into_iter()
                     .filter_map(|(contract_name, contract)| {
                         let name = format!("{}:{}", file_name, contract_name);
-                        let evm = contract.evm.expect("Always exists");
-                        let assembly =
-                            zkevm_assembly::Assembly::from_string(evm.assembly_text?, None)
-                                .expect("Always valid");
+                        let evm = contract.evm?;
+                        let assembly = zkevm_assembly::Assembly::from_string(evm.assembly?, None)
+                            .expect("Always valid");
                         let build = match contract.hash {
                             Some(bytecode_hash) => {
                                 EraVMBuild::new_with_hash(assembly, bytecode_hash)
@@ -436,52 +442,48 @@ impl Compiler for SolidityCompiler {
         sources: Vec<(String, String)>,
         libraries: BTreeMap<String, BTreeMap<String, String>>,
         mode: &Mode,
+        llvm_options: Vec<String>,
         debug_config: Option<era_compiler_llvm_context::DebugConfig>,
     ) -> anyhow::Result<EVMInput> {
         let mode = SolidityMode::unwrap(mode);
 
         let mut solc_output =
             self.standard_json_output_cached(test_path, &sources, &libraries, mode)?;
-
-        if let Some(errors) = solc_output.errors.as_deref() {
-            let mut has_errors = false;
-            let mut error_messages = Vec::with_capacity(errors.len());
-
-            for error in errors.iter() {
-                if error.severity.as_str() == "error" {
-                    has_errors = true;
-                    error_messages.push(error.formatted_message.to_owned());
-                }
-            }
-
-            if has_errors {
-                anyhow::bail!("`solc` errors found: {:?}", error_messages);
-            }
-        }
+        solc_output.collect_errors()?;
 
         let method_identifiers = Self::get_method_identifiers(&solc_output)?;
 
         let last_contract = Self::get_last_contract(&solc_output, &sources)?;
 
-        let project = solc_output.try_to_project(
+        let mut solc_compiler = SolidityCompiler::executable(&mode.solc_version)?;
+
+        let project = era_compiler_solidity::Project::try_from_solidity_sources(
             sources.into_iter().collect::<BTreeMap<String, String>>(),
             libraries,
             mode.solc_pipeline,
-            &era_compiler_solidity::SolcVersion::new_simple(mode.solc_version.to_owned()),
+            &mut solc_output,
+            &mut solc_compiler,
             debug_config.as_ref(),
         )?;
 
-        let build =
-            project.compile_to_evm(mode.llvm_optimizer_settings.to_owned(), false, debug_config)?;
-
+        let build = project.compile_to_evm(
+            &mut vec![],
+            mode.llvm_optimizer_settings.to_owned(),
+            llvm_options,
+            false,
+            None,
+            debug_config,
+        )?;
+        build.collect_errors()?;
         let builds: HashMap<String, EVMBuild> = build
             .contracts
             .into_iter()
-            .map(|(path, contract)| {
-                let build = EVMBuild::new(contract.deploy_build, contract.runtime_build);
+            .map(|(path, build)| {
+                let build = build.expect("Always valid");
+                let build = EVMBuild::new(build.deploy_build, build.runtime_build);
                 (path, build)
             })
-            .collect::<HashMap<String, EVMBuild>>();
+            .collect();
 
         Ok(EVMInput::new(
             builds,

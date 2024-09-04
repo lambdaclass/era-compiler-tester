@@ -35,12 +35,12 @@ pub enum Mode {
 
 impl Mode {
     ///
-    /// Sets the system mode if applicable.
+    /// Enables the EraVM extensions if applicable.
     ///
-    pub fn set_system_mode(&mut self, value: bool) {
+    pub fn enable_eravm_extensions(&mut self, value: bool) {
         match self {
-            Self::Solidity(mode) => mode.is_system_mode = value,
-            Self::Yul(mode) => mode.is_system_mode = value,
+            Self::Solidity(mode) => mode.enable_eravm_extensions = value,
+            Self::Yul(mode) => mode.enable_eravm_extensions = value,
             _ => {}
         }
     }
@@ -151,10 +151,10 @@ impl Mode {
                 .replace_all(current.as_str(), "E*")
                 .to_string();
         }
-        if filter.contains("y*") {
-            current = regex::Regex::new("y[-+]")
+        if filter.contains("I*") {
+            current = regex::Regex::new("I[-+]")
                 .expect("Always valid")
-                .replace_all(current.as_str(), "y*")
+                .replace_all(current.as_str(), "I*")
                 .to_string();
         }
         if filter.contains("V*") {

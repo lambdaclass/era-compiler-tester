@@ -19,6 +19,8 @@ use crate::compilers::yul::YulCompiler;
 use crate::compilers::Compiler;
 use crate::vm::eravm::input::build::Build as EraVMBuild;
 
+pub const ADDRESS_EVM_GAS_MANAGER: u16 = 0x8013;
+
 ///
 /// The EraVM system contracts.
 ///
@@ -107,14 +109,11 @@ impl SystemContracts {
 
     /// The base token system contract implementation path.
     const PATH_BASE_TOKEN: &'static str =
-        "era-contracts/system-contracts/contracts/L2BaseToken.sol:L2BaseToken";
+        "era-contracts/system-contracts/contracts/L2EthToken.sol:L2EthToken";
 
     /// The EVM gas manager system contract implementation path.
     const PATH_EVM_GAS_MANAGER: &'static str =
         "era-contracts/system-contracts/contracts/EvmGasManager.sol:EvmGasManager";
-
-    /// The EVM proxy temporary system contract implementation path.
-    const PATH_EVM_PROXY: &'static str = "tests/solidity/complex/interpreter/Proxy.sol:Proxy";
 
     ///
     /// Loads or builds the system contracts.
@@ -242,12 +241,8 @@ impl SystemContracts {
                 Self::PATH_BASE_TOKEN,
             ),
             (
-                web3::types::Address::from_low_u64_be(0x8013),
+                web3::types::Address::from_low_u64_be(ADDRESS_EVM_GAS_MANAGER.into()),
                 Self::PATH_EVM_GAS_MANAGER,
-            ),
-            (
-                web3::types::Address::from_low_u64_be(0x10000),
-                Self::PATH_EVM_PROXY,
             ),
         ];
 
@@ -256,15 +251,26 @@ impl SystemContracts {
             yul_file_paths.push(path.to_owned());
         }
         yul_file_paths.push(Self::PATH_EVM_INTERPRETER.to_owned());
-        let yul_optimizer_settings =
-            era_compiler_llvm_context::OptimizerSettings::evm_interpreter();
+        let yul_optimizer_settings = era_compiler_llvm_context::OptimizerSettings::cycles();
         let yul_mode = YulMode::new(yul_optimizer_settings, true).into();
-        let mut builds =
-            Self::compile(YulCompiler, &yul_mode, yul_file_paths, debug_config.clone())?;
+        let yul_llvm_options = vec!["-eravm-jump-table-density-threshold", "10"]
+            .into_iter()
+            .map(|option| option.to_owned())
+            .collect();
+        let mut builds = Self::compile(
+            YulCompiler,
+            yul_file_paths,
+            &yul_mode,
+            yul_llvm_options,
+            debug_config.clone(),
+        )?;
 
         let mut solidity_file_paths = Vec::with_capacity(solidity_system_contracts.len() + 1);
         for pattern in [
-            "era-contracts/system-contracts/**/*.sol",
+            "era-contracts/system-contracts/contracts/*.sol",
+            "era-contracts/system-contracts/contracts/libraries/**/*.sol",
+            "era-contracts/system-contracts/contracts/interfaces/**/*.sol",
+            "era-contracts/system-contracts/contracts/openzeppelin/**/*.sol",
             "tests/solidity/complex/interpreter/*.sol",
         ] {
             for path in glob::glob(pattern)?.filter_map(Result::ok) {
@@ -275,8 +281,7 @@ impl SystemContracts {
             }
         }
 
-        let solidity_optimizer_settings =
-            era_compiler_llvm_context::OptimizerSettings::evm_interpreter();
+        let solidity_optimizer_settings = era_compiler_llvm_context::OptimizerSettings::cycles();
         let solidity_mode = SolidityMode::new(
             solc_version,
             era_compiler_solidity::SolcPipeline::Yul,
@@ -289,8 +294,9 @@ impl SystemContracts {
         .into();
         builds.extend(Self::compile(
             SolidityCompiler::new(),
-            &solidity_mode,
             solidity_file_paths,
+            &solidity_mode,
+            vec![],
             debug_config,
         )?);
 
@@ -375,8 +381,9 @@ impl SystemContracts {
     ///
     fn compile<C>(
         compiler: C,
-        mode: &Mode,
         paths: Vec<String>,
+        mode: &Mode,
+        llvm_options: Vec<String>,
         debug_config: Option<era_compiler_llvm_context::DebugConfig>,
     ) -> anyhow::Result<HashMap<String, EraVMBuild>>
     where
@@ -416,6 +423,7 @@ impl SystemContracts {
                 sources,
                 BTreeMap::new(),
                 mode,
+                llvm_options,
                 debug_config,
             )
             .map(|output| output.builds)

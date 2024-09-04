@@ -231,6 +231,7 @@ impl Compiler for VyperCompiler {
         sources: Vec<(String, String)>,
         _libraries: BTreeMap<String, BTreeMap<String, String>>,
         mode: &Mode,
+        llvm_options: Vec<String>,
         debug_config: Option<era_compiler_llvm_context::DebugConfig>,
     ) -> anyhow::Result<EraVMInput> {
         let mode = VyperMode::unwrap(mode);
@@ -254,7 +255,9 @@ impl Compiler for VyperCompiler {
 
         let build = project.compile(
             None,
+            true,
             mode.llvm_optimizer_settings.to_owned(),
+            llvm_options,
             true,
             zkevm_assembly::get_encoding_mode(),
             vec![],
@@ -266,7 +269,7 @@ impl Compiler for VyperCompiler {
             .into_iter()
             .map(|(path, contract)| {
                 zkevm_assembly::Assembly::from_string(
-                    contract.build.assembly_text,
+                    contract.build.assembly.expect("Always exists"),
                     contract.build.metadata_hash,
                 )
                 .map_err(anyhow::Error::new)
@@ -290,6 +293,7 @@ impl Compiler for VyperCompiler {
         _sources: Vec<(String, String)>,
         _libraries: BTreeMap<String, BTreeMap<String, String>>,
         _mode: &Mode,
+        _llvm_options: Vec<String>,
         _debug_config: Option<era_compiler_llvm_context::DebugConfig>,
     ) -> anyhow::Result<crate::vm::evm::input::Input> {
         todo!()

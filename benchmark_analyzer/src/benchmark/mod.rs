@@ -26,11 +26,11 @@ impl Benchmark {
     /// The EVM interpreter group identifier.
     pub const EVM_INTERPRETER_GROUP_NAME: &'static str = "EVMInterpreter";
 
-    /// The EVM interpreter group identifier prefix.
-    pub const EVM_INTERPRETER_GROUP_PREFIX: &'static str = "EVMInterpreter M3B3";
+    /// The EVM interpreter cycles group identifier.
+    pub const EVM_INTERPRETER_GROUP_NAME_CYCLES: &'static str = "EVMInterpreter M3B3";
 
     /// The EVM opcodes to test.
-    pub const EVM_OPCODES: [&'static str; 119] = [
+    pub const EVM_OPCODES: [&'static str; 135] = [
         "ADD",
         "MUL",
         "SUB",
@@ -63,6 +63,17 @@ impl Benchmark {
         "ORIGIN",
         "CALLER",
         "CALLVALUE",
+        "CALLDATALOAD",
+        "CALLDATASIZE",
+        "CALLDATACOPY",
+        "CODESIZE",
+        "CODECOPY",
+        "GASPRICE",
+        "EXTCODESIZE",
+        "EXTCODECOPY",
+        "RETURNDATASIZE",
+        "RETURNDATACOPY",
+        "EXTCODEHASH",
         "BLOCKHASH",
         "COINBASE",
         "TIMESTAMP",
@@ -148,6 +159,11 @@ impl Benchmark {
         "SWAP14",
         "SWAP15",
         "SWAP16",
+        "CALL",
+        "STATICCALL",
+        "DELEGATECALL",
+        "CREATE",
+        "CREATE2",
         "RETURN",
         "REVERT",
     ];
@@ -165,7 +181,7 @@ impl Benchmark {
             };
 
             let mut group_results = Group::compare(reference_group, candidate_group);
-            if group_name.starts_with(Self::EVM_INTERPRETER_GROUP_PREFIX) {
+            if group_name.starts_with(Self::EVM_INTERPRETER_GROUP_NAME_CYCLES) {
                 if let (Some(reference_ratios), Some(candidate_ratios)) = (
                     reference
                         .groups

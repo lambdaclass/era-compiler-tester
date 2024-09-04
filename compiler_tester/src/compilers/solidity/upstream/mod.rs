@@ -292,6 +292,7 @@ impl Compiler for SolidityCompiler {
         _sources: Vec<(String, String)>,
         _libraries: BTreeMap<String, BTreeMap<String, String>>,
         _mode: &Mode,
+        _llvm_options: Vec<String>,
         _debug_config: Option<era_compiler_llvm_context::DebugConfig>,
     ) -> anyhow::Result<EraVMInput> {
         anyhow::bail!("The upstream Solidity compiler cannot compile for EraVM");
@@ -303,6 +304,7 @@ impl Compiler for SolidityCompiler {
         sources: Vec<(String, String)>,
         libraries: BTreeMap<String, BTreeMap<String, String>>,
         mode: &Mode,
+        _llvm_options: Vec<String>,
         _debug_config: Option<era_compiler_llvm_context::DebugConfig>,
     ) -> anyhow::Result<EVMInput> {
         let mode = SolidityUpstreamMode::unwrap(mode);
@@ -353,9 +355,8 @@ impl Compiler for SolidityCompiler {
                     .as_str();
                 let build = EVMBuild::new(
                     era_compiler_llvm_context::EVMBuild::new(
-                        "".to_owned(),
-                        None,
                         hex::decode(bytecode_string).expect("Always valid"),
+                        None,
                     ),
                     era_compiler_llvm_context::EVMBuild::default(),
                 );
