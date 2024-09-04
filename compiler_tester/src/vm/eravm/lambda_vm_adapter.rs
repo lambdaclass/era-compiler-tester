@@ -166,14 +166,14 @@ pub fn run_vm(
         TaggedValue::new_raw_integer(abi_params.r5_value.unwrap_or_default()),
     );
 
-    let mut era_vm = EraVM::new(vm, Rc::new(RefCell::new(storage.clone())));
+    let mut era_vm = EraVM::new(vm);
     let mut blob_tracer = BlobSaverTracer::new();
     let result = match zkevm_assembly::get_encoding_mode() {
         zkevm_assembly::RunningVmEncodingMode::Testing => {
-            era_vm.run_program_with_test_encode_and_tracer(&mut blob_tracer)
+            era_vm.run_program_with_test_encode_and_tracer(&mut blob_tracer, &mut storage)
         }
         zkevm_assembly::RunningVmEncodingMode::Production => {
-            era_vm.run_program_with_custom_bytecode_and_tracer(&mut blob_tracer)
+            era_vm.run_program_with_custom_bytecode_and_tracer(&mut blob_tracer,  &mut storage)
         }
     };
     let events = merge_events(&era_vm.state.events());
